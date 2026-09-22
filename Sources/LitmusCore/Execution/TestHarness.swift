@@ -42,4 +42,11 @@ public protocol TestHarness: Sendable {
 
     /// Runs the built tests, with at most one mutant switched on.
     func test(_ built: BuiltTests, lane: String, switchOn mutantSwitch: String?) throws -> TestOutput
+
+    /// Runs the suite once with coverage on, and reports what it reached.
+    ///
+    /// Measured on the project as written, before any mutant exists: the
+    /// positions in a plan are positions in the original file, and injection
+    /// moves every line below it.
+    func coverage(lane: String) throws -> Coverage
 }

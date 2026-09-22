@@ -10,6 +10,8 @@ public struct ProjectInjection: Sendable {
         public let mutants: [Mutant]
         /// Files that were read but produced nothing to mutate.
         public let untouched: Int
+        /// Mutants dropped because no test reaches them.
+        public let uncovered: Int
     }
 
     /// Directories that never hold code worth mutating, and would make the copy
@@ -21,10 +23,19 @@ public struct ProjectInjection: Sendable {
 
     public let injector: SchemataInjector
     public let include: String?
+    /// What the suite reached, if it was measured. Mutants outside it are never
+    /// written: they would survive whatever the code did, and each one costs a
+    /// run to learn nothing.
+    public let coverage: Coverage?
 
-    public init(injector: SchemataInjector = SchemataInjector(), include: String? = nil) {
+    public init(
+        injector: SchemataInjector = SchemataInjector(),
+        include: String? = nil,
+        coverage: Coverage? = nil
+    ) {
         self.injector = injector
         self.include = include
+        self.coverage = coverage
     }
 
     public func callAsFunction(
@@ -36,8 +47,16 @@ public struct ProjectInjection: Sendable {
 
         var mutants: [Mutant] = []
         var untouched = 0
+        var uncovered = 0
 
-        for file in try swiftFiles(in: workingCopy) {
+        let files = try swiftFiles(in: workingCopy)
+
+        // Coverage was measured on the original project, so its paths name the
+        // original tree. Re-keying it onto the copy is what makes the lookup
+        // below match anything at all.
+        let coverage = coverage?.rebased(onto: files.map(\.path))
+
+        for file in files {
             if let include, !file.path.contains(include) { continue }
 
             let result = try injector(path: file.path)
@@ -46,12 +65,30 @@ public struct ProjectInjection: Sendable {
                 continue
             }
 
+            // Filtered before the file is written, not after: a mutant no test
+            // reaches would otherwise still be compiled in and still grow the
+            // file, for a verdict that is known in advance.
+            let reachable = result.mutants.filter {
+                coverage?.reaches(path: file.path, line: $0.line) ?? true
+            }
+            uncovered += result.mutants.count - reachable.count
+
+            guard !reachable.isEmpty else {
+                untouched += 1
+                continue
+            }
+
             try result.source.write(to: file, atomically: true, encoding: .utf8)
-            mutants.append(contentsOf: result.mutants)
-            progress("\(file.lastPathComponent): \(result.mutants.count)")
+            mutants.append(contentsOf: reachable)
+            progress("\(file.lastPathComponent): \(reachable.count)")
         }
 
-        return Result(workingCopy: workingCopy, mutants: mutants, untouched: untouched)
+        return Result(
+            workingCopy: workingCopy,
+            mutants: mutants,
+            untouched: untouched,
+            uncovered: uncovered
+        )
     }
 
     private func copy(_ project: URL, to destination: URL) throws {

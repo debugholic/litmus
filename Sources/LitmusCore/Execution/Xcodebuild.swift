@@ -113,13 +113,80 @@ public struct Xcodebuild: Sendable, TestHarness {
         return TestOutput(log: log, status: status)
     }
 
+    /// `xcodebuild test -enableCodeCoverage`, then `xccov` for the totals.
+    ///
+    /// Reported per file rather than per line. `xccov` will give line detail,
+    /// but only one file per invocation, so the line-level report costs a
+    /// process per source file. Whole files with nothing running in them are
+    /// where most of the waste is, and they come out of a single call.
+    public func coverage(lane: String) throws -> Coverage {
+        let bundle = derivedDataPath.appendingPathComponent("litmus-coverage.xcresult")
+        // xcodebuild refuses to write over one that is already there.
+        try? FileManager.default.removeItem(at: bundle)
+
+        let (log, status) = try run(arguments: [
+            "test",
+            "-scheme", scheme,
+            "-destination", lane,
+            "-derivedDataPath", derivedDataPath.path,
+            "-enableCodeCoverage", "YES",
+            "-resultBundlePath", bundle.path,
+        ])
+
+        guard status == 0 else {
+            throw Failure(description: "coverage run failed:\n\(log)")
+        }
+
+        let (report, reportStatus) = try run(
+            executable: "/usr/bin/xcrun",
+            arguments: ["xccov", "view", "--report", "--json", bundle.path]
+        )
+
+        guard reportStatus == 0 else {
+            throw Failure(description: "xccov failed:\n\(report)")
+        }
+
+        return try Self.parse(report)
+    }
+
+    static func parse(_ report: String) throws -> Coverage {
+        guard
+            let root = try JSONSerialization.jsonObject(with: Data(report.utf8)) as? [String: Any],
+            let targets = root["targets"] as? [[String: Any]]
+        else {
+            throw Failure(description: "not an xccov report")
+        }
+
+        var files: [String: Coverage.File] = [:]
+
+        for target in targets {
+            for file in target["files"] as? [[String: Any]] ?? [] {
+                guard let path = file["path"] as? String else { continue }
+
+                let covered = file["coveredLines"] as? Int ?? 0
+
+                // Every source file is listed under both the library target and
+                // the test target that exercises it. Whichever entry saw
+                // something run is the one that settles it.
+                if covered > 0 {
+                    files[path] = .reached
+                } else if files[path] == nil {
+                    files[path] = .unreached
+                }
+            }
+        }
+
+        return Coverage(files: files)
+    }
+
     @discardableResult
     private func run(
+        executable: String? = nil,
         arguments: [String],
         environment: [String: String] = [:]
     ) throws -> (log: String, status: Int32) {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
+        process.executableURL = URL(fileURLWithPath: executable ?? self.executable)
         process.arguments = arguments
         process.currentDirectoryURL = workingDirectory
         process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }

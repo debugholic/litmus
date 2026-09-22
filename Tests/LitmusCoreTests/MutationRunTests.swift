@@ -70,6 +70,8 @@ struct MutationRunTests {
 
         func build(lane: String) throws -> BuiltTests { BuiltTests() }
 
+        func coverage(lane: String) throws -> Coverage { Coverage(files: [:]) }
+
         func test(
             _ built: BuiltTests,
             lane: String,
