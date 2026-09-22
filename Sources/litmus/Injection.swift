@@ -8,6 +8,15 @@ import LitmusCore
 /// which carries straight on. The two used to be separate steps a caller
 /// stitched together by hand, passing the same scheme twice and carrying a
 /// plan path between them.
+/// Nothing to mutate, which is not a failure.
+///
+/// A branch that only touched tests or comments has nothing for Litmus to
+/// change, and a pipeline that goes red for that is a pipeline people learn to
+/// ignore. Thrown so the caller can say so and exit cleanly.
+struct NothingToMutate: Error {
+    let reason: String
+}
+
 struct Injection {
     let project: URL
     let workingCopy: URL
@@ -20,8 +29,8 @@ struct Injection {
             let diff = try GitDiff.changed(since: base, in: project)
 
             guard !diff.isEmpty else {
-                throw ValidationError(
-                    "nothing has changed since \(base) — pass --all to mutate everything"
+                throw NothingToMutate(
+                    reason: "no Swift file has changed since \(base)"
                 )
             }
 
@@ -56,10 +65,13 @@ struct Injection {
         )(project: project, workingCopy: workingCopy) { if verbose { print("  \($0)".dim) } }
 
         guard !result.mutants.isEmpty else {
-            throw ValidationError("""
-            nothing left to mutate\(scope.only.map { " under '\($0)'" } ?? "")\
-            \(result.unchanged > 0 ? "; \(result.unchanged) were outside the change" : "")\
-            \(result.uncovered > 0 ? "; \(result.uncovered) were unreachable" : "")
+            var why: [String] = []
+            if result.unchanged > 0 { why.append("\(result.unchanged) outside the change") }
+            if result.uncovered > 0 { why.append("\(result.uncovered) no test reaches") }
+
+            throw NothingToMutate(reason: """
+            nothing to mutate\(scope.only.map { " under '\($0)'" } ?? "")\
+            \(why.isEmpty ? "" : " — \(why.joined(separator: ", "))")
             """)
         }
 

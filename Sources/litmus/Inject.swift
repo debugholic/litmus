@@ -25,12 +25,19 @@ struct Inject: AsyncParsableCommand {
             ?? project.deletingLastPathComponent()
                 .appendingPathComponent(project.lastPathComponent + "_litmus")
 
-        let result = try Injection(
-            project: project,
-            workingCopy: workingCopy,
-            scope: scope,
-            harness: harness
-        )(verbose: true)
+        let result: ProjectInjection.Result
+        do {
+            result = try Injection(
+                project: project,
+                workingCopy: workingCopy,
+                scope: scope,
+                harness: harness
+            )(verbose: true)
+        } catch let nothing as NothingToMutate {
+            print("\(nothing.reason).")
+            print("Pass --all to mutate the whole tree.")
+            return
+        }
 
         let planURL = plan.map { URL(fileURLWithPath: $0) }
             ?? workingCopy.appendingPathComponent("litmus-plan.json")

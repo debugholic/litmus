@@ -47,7 +47,20 @@ struct Run: AsyncParsableCommand {
 
     func run() async throws {
         let project = URL(fileURLWithPath: project).standardizedFileURL
-        let (working, mutants) = try prepared(project)
+
+        let working: URL
+        let mutants: [Mutant]
+
+        do {
+            (working, mutants) = try prepared(project)
+        } catch let nothing as NothingToMutate {
+            // Not a failure and not a misuse: printing usage here would say the
+            // command was typed wrong, and exiting non-zero would turn a
+            // documentation-only branch into a red pipeline.
+            print("\(nothing.reason).")
+            print("Pass --all to mutate the whole tree.")
+            return
+        }
 
         // A mutant listed in the plan but absent from the source would run as a
         // false survivor, so drop it and say so rather than scoring it.
