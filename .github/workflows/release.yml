@@ -59,11 +59,19 @@ jobs:
           # "(architecture x86_64):" header for each slice, and those lines are
           # not paths, so a plain grep reads them as foreign libraries.
           for arch in arm64 x86_64; do
+            # Selected by shape, not by line number. otool prints a header for
+            # the file and another for the slice, and the count differs between
+            # toolchains; a `tail -n +2` guessed at it and read a leftover
+            # header as a library. Dependency lines are the indented ones.
+            FOREIGN=$(otool -arch "$arch" -L "$BIN" \
+                        | grep '^[[:space:]]' \
+                        | grep -vE '^[[:space:]]+(/usr/lib/|/System/)' || true)
+
             # Anything outside /usr/lib and /System is a library the installing
             # machine has no reason to have.
-            if otool -arch "$arch" -L "$BIN" | tail -n +2 \
-                 | grep -vE '^[[:space:]]+(/usr/lib/|/System/)'; then
+            if [ -n "$FOREIGN" ]; then
               echo "::error::the $arch slice links something outside the system"
+              echo "$FOREIGN"
               exit 1
             fi
           done
