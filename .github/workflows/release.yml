@@ -1,0 +1,105 @@
+name: release
+
+# Tagging is the whole trigger. Building the binary by hand is the step that
+# gets skipped on a tired evening, and then a release ships a binary that does
+# not match the source it claims to be.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and attach a binary to"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Work out the version
+        id: version
+        run: echo "tag=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      # A release that fails its own tests is worse than no release: it is a
+      # tool for finding holes, shipped without knowing whether it works.
+      - name: Test
+        run: swift test
+
+      - name: Build
+        run: swift build -c release --arch arm64 --arch x86_64
+
+      - name: Check the binary stands on its own
+        run: |
+          BIN=$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/litmus
+          file "$BIN"
+          # Anything outside /usr/lib and /System is a library the installing
+          # machine has no reason to have.
+          if otool -L "$BIN" | tail -n +2 | grep -vE '^\s+(/usr/lib/|/System/)'; then
+            echo "::error::the binary links something outside the system"
+            exit 1
+          fi
+          "$BIN" --help > /dev/null
+
+      - name: Package
+        id: package
+        run: |
+          BIN=$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/litmus
+          NAME="litmus-${{ steps.version.outputs.tag }}-macos-universal.tar.gz"
+          mkdir -p dist && cp "$BIN" dist/ && cp LICENSE NOTICE dist/
+          tar -czf "$NAME" -C dist .
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "sha=$(shasum -a 256 "$NAME" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Attach it to the release
+        run: |
+          gh release view "${{ steps.version.outputs.tag }}" >/dev/null 2>&1 \
+            || gh release create "${{ steps.version.outputs.tag }}" \
+                 --title "${{ steps.version.outputs.tag }}" --generate-notes
+          gh release upload "${{ steps.version.outputs.tag }}" \
+            "${{ steps.package.outputs.name }}" --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # Without this the formula still points at the previous release, and
+      # `brew install` quietly installs the old version.
+      - name: Point the tap at it
+        if: env.TAP_TOKEN != ''
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+          ASSET: ${{ steps.package.outputs.name }}
+          SHA: ${{ steps.package.outputs.sha }}
+        run: |
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/${{ github.repository_owner }}/homebrew-tap.git" tap
+          cd tap
+          cat > Formula/litmus.rb <<EOF
+          class Litmus < Formula
+            desc "Mutation testing for Swift"
+            homepage "https://github.com/${{ github.repository }}"
+            url "https://github.com/${{ github.repository }}/releases/download/${TAG}/${ASSET}"
+            sha256 "${SHA}"
+            license "MIT"
+            version "${TAG#v}"
+            head "https://github.com/${{ github.repository }}.git", branch: "main"
+
+            depends_on :macos
+
+            def install
+              bin.install "litmus"
+            end
+
+            test do
+              assert_match "Mutation testing for Swift", shell_output("#{bin}/litmus --help")
+            end
+          end
+          EOF
+          git -c user.name="litmus release" -c user.email="noreply@github.com" \
+              commit -am "litmus ${TAG}" --allow-empty
+          git push
