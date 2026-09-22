@@ -14,7 +14,7 @@ struct Litmus: AsyncParsableCommand {
 
     /// Set from the tag at release time. A build from source says so rather
     /// than claiming a version it is not.
-    static let version = "0.1.1-dev"
+    static let version = "0.1.1"
 
     static let configuration = CommandConfiguration(
         commandName: "litmus",
