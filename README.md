@@ -7,19 +7,16 @@ would have noticed if those lines were wrong. Litmus answers the second
 question: it changes your code on purpose and checks whether your tests fail.
 
 ```
-$ litmus run --project . --plan litmus-plan.json --harness swiftpm
-
-2 mutants, 1 process(s)
-  checking the baseline first…
+$ litmus
 
   ✔ killed   TestSuiteOutcome.swift:14  swapped the branches of a ternary
-  ✘ survived MutationOperator.swift:24  changed == to !=
+  ✘ survived PlayerControlViewModel.swift:479  removed a call whose result is unused
 
 Litmus score 50%
 killed 1 / survived 1 / error 0
 
 survived — nothing failed when this changed:
-  MutationOperator.swift:24  changed == to !=
+  PlayerControlViewModel.swift:479  removed a call whose result is unused
 ```
 
 A surviving mutant is a hole. Something in your code can be wrong and every
@@ -27,58 +24,98 @@ test still passes.
 
 ## Using it
 
-Injection and running are separate commands, because injection rewrites a copy
-of your project and you may want to look at it.
-
 ```
-$ litmus inject --project . --output /tmp/mutated
-  PlayerControlViewModel+Bookmark.swift: 14
-  14 mutants across 1 file(s)
-  plan written to /tmp/mutated/litmus-plan.json
-
-$ cd /tmp/mutated
-$ litmus run --project . --plan litmus-plan.json \
-             --scheme MyApp --simulators <UDID> <UDID>
+$ litmus
 ```
 
-`--only <text>` narrows either command to paths containing that text.
+In a project directory, that is the whole command. Litmus works out the rest:
+whether the tests need a simulator, which scheme to build, which simulator to
+use, and what this branch changed.
+
+```
+changes since origin/develop
+measuring coverage…
+  scheme MyApp
+
+16 mutants across 2 file(s), skipping 1391 outside the change and 85 unreachable
+  checking the baseline first…
+
+  ✔ killed   PlayerControlViewModel+Bookmark.swift:26  removed a call whose result is unused
+  ✘ survived PlayerControlViewModel.swift:479  removed a call whose result is unused
+
+Litmus score 50%
+killed 1 / survived 1 / error 0
+```
+
+Where a guess would be wrong, pass it: `--scheme`, `--harness xcode|swiftpm`,
+`--simulators <UDID>…`, `--destination`. Where the project is ambiguous —
+several schemes, say — Litmus stops and lists them rather than picking one,
+because the wrong choice takes hours to disprove.
+
+`--workers N` runs N mutants at once, each on its own simulator. It defaults to
+one: a simulator is not cheap, and past a point they contend for the machine
+rather than share it.
+
 `--format plain|json|html|xcode` and `--output <path>` control the report;
 `xcode` emits `warning:` lines Xcode shows beside the mutated line.
 
-### Skipping what no test reaches
+### What it mutates, by default
 
-A mutant on a line no test runs cannot be killed. It will survive whatever the
-code says, and the only thing running it buys is the minute it took.
+Two filters are on unless you turn them off, because a run that takes hours is
+a run nobody does.
+
+**What this branch changed.** The whole tree is the right scope for a nightly
+job; for a review it is thousands of mutants on code nobody touched, and their
+verdicts were settled on the last run. The base is `origin/HEAD` — what a
+review diffs against — and the diff is taken line by line, against the merge
+base, and reaches the working tree so uncommitted work counts. On the default
+branch, or outside a repository with a remote, there is nothing to compare
+against and the whole tree is the honest scope.
+
+**What no test reaches.** A mutant on a line no test runs cannot be killed. It
+will survive whatever the code says, and the only thing running it buys is the
+minute it took. Litmus runs the suite once with coverage on and filters before
+writing, so a skipped mutant costs neither a run nor the file growth.
 
 ```
-$ litmus inject --project . --output /tmp/mutated \
-                --skip-coverage --harness swiftpm
-
-measuring coverage first…
-  89 file(s) with nothing running in them
-
-  75 mutants across 12 file(s)
-  12 skipped — no test reaches them
+litmus --all           # the whole tree
+litmus --since main    # a different base
+litmus --no-coverage   # keep what no test reaches
+litmus --only Bookmark # only paths containing this
 ```
 
-Litmus runs the suite once with coverage on and filters before writing, so a
-skipped mutant costs neither a run nor the file growth. Coverage is measured on
-the project as written: injecting moves every line below the first mutant, and
-a plan's positions are positions in the original.
+On one iOS project — 1,492 mutants across 105 files:
 
+| | mutants | on one simulator |
+|---|---|---|
+| `--all --no-coverage` | 1,492 | a day |
+| `--all` | 203 | hours |
+| the default | 16 | minutes |
+
+The last row is a run that fits inside a pull request. Litmus says what it left
+out before it starts, because a narrow run that scores well is not a clean bill
+of health for the project.
+
+Coverage is measured on the project as written: injecting moves every line
+below the first mutant, and a plan's positions are positions in the original.
 The `swiftpm` harness filters line by line, through `llvm-cov export -format=lcov`.
 The `xcode` harness filters whole files, through `xccov view --report`, which
 gives line detail only one file per invocation.
 
-Anything the report is silent about is kept. Dropping a mutant that could have
-been killed hides a hole, which is the one failure this tool exists to prevent;
-keeping one that cannot costs a single run.
+### Looking at the mutants
+
+`litmus` injects into a copy and runs it. To keep the copy and read it:
+
+```
+$ litmus inject --output /tmp/mutated
+$ litmus run --project /tmp/mutated --plan /tmp/mutated/litmus-plan.json
+```
+
+The original is never modified, by either command.
 
 ### Two ways to run the tests
 
-`--harness xcode` builds a scheme and runs it on a simulator. Pass
-`--simulators` more than once to spread mutants across several; each one is a
-worker, and they only read what the build produced.
+`--harness xcode` builds a scheme and runs it on a simulator.
 
 `--harness swiftpm` runs the package's own tests on this machine. A package
 that never reaches for UIKit does not need a simulator, and the simulator is
@@ -86,6 +123,10 @@ what a mutation run actually costs — on one project, narrowing the suite with
 `-only-testing` cut test time from 24.6s to 0.236s without moving the wall
 clock at all. The minute per mutant was the round trip, not the tests. Litmus
 run against itself this way costs about 6 seconds per mutant.
+
+Litmus picks between them by looking for an `.xcodeproj` or `.xcworkspace`, and
+failing that, for an `import UIKit`: a project that reaches for UIKit cannot
+build for this machine whatever else is true of it.
 
 ## How it works
 

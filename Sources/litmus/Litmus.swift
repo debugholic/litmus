@@ -22,19 +22,17 @@ struct Litmus: AsyncParsableCommand {
 
 struct Run: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Run every mutant and report what the tests failed to notice."
+        abstract: "Change the code on purpose and report what the tests did not notice."
     )
 
-    @Option(help: "Project with the mutants already injected.")
-    var project: String
+    @Option(help: "Project to test. It is never modified.")
+    var project: String = "."
 
-    @Option(help: "Mutant list, as written by 'muter mutate-without-running'.")
-    var plan: String
+    @Option(help: "An already injected plan, from 'litmus inject'.")
+    var plan: String?
 
+    @OptionGroup var scope: ScopeOptions
     @OptionGroup var harness: HarnessOptions
-
-    @Option(help: "Only run mutants whose path contains this text.")
-    var only: String?
 
     @Option(help: "Report format: plain, json, html or xcode.")
     var format: ReportFormat = .plain
@@ -44,23 +42,13 @@ struct Run: AsyncParsableCommand {
 
     func run() async throws {
         let project = URL(fileURLWithPath: project).standardizedFileURL
-        var mutants = try Plan.read(contentsOf: URL(fileURLWithPath: plan))
-
-        if let only {
-            mutants = mutants.filter { $0.filePath.contains(only) }
-        }
-
-        guard !mutants.isEmpty else {
-            throw ValidationError("the plan contains no mutants")
-        }
-
-        let (testHarness, lanes) = try harness.resolved(for: project)
+        let (working, mutants) = try prepared(project)
 
         // A mutant listed in the plan but absent from the source would run as a
         // false survivor, so drop it and say so rather than scoring it.
         let check = InjectionCheck()(mutants)
         if !check.missing.isEmpty {
-            print("  \(check.missing.count) mutant(s) in the plan were never injected — skipping".yellow)
+            print("  \(check.missing.count) mutant(s) were never injected — skipping".yellow)
             for mutant in check.missing.prefix(10) {
                 print("    \(mutant.fileName):\(mutant.line)  \(mutant.description)")
             }
@@ -70,23 +58,22 @@ struct Run: AsyncParsableCommand {
             for path in check.unreadable {
                 print("    could not read \(path)")
             }
-            print("")
         }
 
-        mutants = check.injected
-        guard !mutants.isEmpty else {
+        guard !check.injected.isEmpty else {
             throw ValidationError("no mutant from the plan is present in the source")
         }
 
-        print("\(mutants.count) mutants, \(lanes.count) \(testHarness.laneNoun)(s)")
+        let (testHarness, lanes) = try harness.resolved(for: working) { print("  \($0)") }
+
+        print("\(check.injected.count) mutants, \(lanes.count) at a time")
         print("  checking the baseline first…\n")
 
-        let run = MutationRun(
+        let summary = try await MutationRun(
             configuration: .init(harness: testHarness, lanes: lanes),
             progress: { Self.report($0) }
-        )
+        )(check.injected)
 
-        let summary = try await run(mutants)
         let rendered = try Report(summary).rendered(as: format)
 
         if let output {
@@ -97,6 +84,34 @@ struct Run: AsyncParsableCommand {
         }
     }
 
+    /// The copy to run in, and what to run in it.
+    ///
+    /// Injecting is part of a run, not a step before it. Passing `--plan` says
+    /// the work was already done — by `litmus inject`, for a copy worth looking
+    /// at — and this runs that instead.
+    private func prepared(_ project: URL) throws -> (working: URL, mutants: [Mutant]) {
+        if let plan {
+            return (project, try Plan.read(contentsOf: URL(fileURLWithPath: plan)))
+        }
+
+        let workingCopy = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("litmus-\(project.lastPathComponent)")
+
+        let result = try Injection(
+            project: project,
+            workingCopy: workingCopy,
+            scope: scope,
+            harness: harness
+        )(verbose: false)
+
+        // Said before the run, not only in the report: a narrowed run that
+        // scores well is not a clean bill of health for the project, and the
+        // number alone does not say so.
+        print(Injection.scopeLine(result))
+
+        return (workingCopy, result.mutants)
+    }
+
     private static func report(_ result: MutantResult) {
         let mark: String
         switch result.verdict {
@@ -105,34 +120,7 @@ struct Run: AsyncParsableCommand {
         case .error: mark = "– error   ".yellow
         }
 
-        let location = "\(result.mutant.fileName):\(result.mutant.line)"
-        print("  \(mark) \(location)  \(result.mutant.description)")
-    }
-}
-
-private extension MutationRun.Summary {
-    func formatted() -> String {
-        var lines: [String] = [""]
-
-        if let score {
-            lines.append("  Litmus score \(String(format: "%.0f", score))%"
-                + "  (killed \(killed) / survived \(survived)"
-                + (errored > 0 ? " / error \(errored)" : "")
-                + ")")
-        } else {
-            lines.append("  no mutant produced a verdict")
-        }
-
-        let survivors = results.filter { $0.verdict == .survived }
-        if !survivors.isEmpty {
-            lines.append("")
-            lines.append("  survived — nothing failed when this changed:")
-            for result in survivors.sorted(by: { $0.mutant.line < $1.mutant.line }) {
-                lines.append("    \(result.mutant.fileName):\(result.mutant.line)  \(result.mutant.description)")
-            }
-        }
-
-        return lines.joined(separator: "\n")
+        print("  \(mark) \(result.mutant.fileName):\(result.mutant.line)  \(result.mutant.description)")
     }
 }
 

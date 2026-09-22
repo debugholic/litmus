@@ -11,44 +11,49 @@ enum HarnessKind: String, ExpressibleByArgument, CaseIterable {
     case swiftpm
 }
 
-/// The options both `inject` and `run` need, because both may have to build
-/// and run the suite: one to measure coverage, the other to kill mutants.
+/// How to build and run the suite.
+///
+/// Every option here has an answer that can be worked out from the project, so
+/// all of them are optional. They exist for the times the guess is wrong or the
+/// project is ambiguous, not for every run.
 struct HarnessOptions: ParsableArguments {
-    @Option(help: "How to run the tests: xcode or swiftpm.")
-    var harness: HarnessKind = .xcode
+    @Option(help: "How to run the tests. Worked out from the project by default.")
+    var harness: HarnessKind?
 
-    @Option(help: "Scheme to build. Required with the xcode harness.")
+    @Option(help: "Scheme to build. Used when the project has more than one.")
     var scheme: String?
+
+    @Option(help: "How many mutants to run at once.")
+    var workers: Int = 1
 
     @Option(
         parsing: .upToNextOption,
-        help: "Simulator UDIDs to spread the work over. One means sequential."
+        help: "Simulator UDIDs to use, instead of picking them."
     )
     var simulators: [String] = []
 
-    @Option(help: "Destination to use when no simulators are given.")
+    @Option(help: "An xcodebuild destination to use, instead of a simulator.")
     var destination: String?
-
-    @Option(help: "Test processes to run at once. The swiftpm harness supports 1.")
-    var workers: Int = 1
 
     /// The harness to run with, and one lane per worker.
     ///
     /// A simulator is a real lane — a mutant runs on one at a time. A Swift
     /// package has no such thing, so a lane there is just a slot.
-    func resolved(for project: URL) throws -> (harness: any TestHarness, lanes: [String]) {
-        switch harness {
+    func resolved(for project: URL, say: (String) -> Void = { _ in }) throws -> (
+        harness: any TestHarness,
+        lanes: [String]
+    ) {
+        guard workers >= 1 else {
+            throw ValidationError("--workers has to be at least 1")
+        }
+
+        switch harness ?? Discovery.harness(in: project) {
         case .xcode:
-            guard let scheme else {
-                throw ValidationError("--scheme is required with the xcode harness")
-            }
-
-            let destinations = simulators.map { "platform=iOS Simulator,id=\($0)" }
-                .nilIfEmpty ?? [destination].compactMap { $0 }
-
-            guard !destinations.isEmpty else {
-                throw ValidationError("pass --simulators or --destination")
-            }
+            let scheme = try scheme ?? {
+                let found = try Discovery.scheme(in: project)
+                say("scheme \(found)")
+                return found
+            }()
 
             return (
                 Xcodebuild(
@@ -56,7 +61,7 @@ struct HarnessOptions: ParsableArguments {
                     scheme: scheme,
                     derivedDataPath: project.appendingPathComponent("build/litmus")
                 ),
-                destinations
+                try destinations(say: say)
             )
 
         case .swiftpm:
@@ -79,8 +84,55 @@ struct HarnessOptions: ParsableArguments {
             return (SwiftPackage(workingDirectory: project), ["worker 1"])
         }
     }
+
+    private func destinations(say: (String) -> Void) throws -> [String] {
+        if !simulators.isEmpty {
+            return simulators.map { "platform=iOS Simulator,id=\($0)" }
+        }
+
+        if let destination {
+            guard workers == 1 else {
+                throw ValidationError("--destination names one device; drop --workers or pass --simulators")
+            }
+            return [destination]
+        }
+
+        let found = try Discovery.simulators(count: workers)
+
+        if found.count < workers {
+            say("only \(found.count) simulator(s) available, so that is the width")
+        }
+
+        return found.map { "platform=iOS Simulator,id=\($0)" }
+    }
 }
 
-extension Array {
-    var nilIfEmpty: Self? { isEmpty ? nil : self }
+/// Which mutants to write.
+struct ScopeOptions: ParsableArguments {
+    @Option(help: "Only mutate files whose path contains this text.")
+    var only: String?
+
+    @Option(help: "Only mutate lines changed since this git ref.")
+    var since: String?
+
+    @Flag(help: "Mutate the whole tree, not only what this branch changed.")
+    var all = false
+
+    @Flag(
+        inversion: .prefixedNo,
+        help: "Skip mutants no test reaches. They survive whatever the code does."
+    )
+    var coverage = true
+
+    /// The ref to diff against, or nil to take the whole tree.
+    ///
+    /// Defaulting to the branch's own base is what makes a plain `litmus` fit
+    /// inside a review. On the default branch, or outside a repository with a
+    /// remote, there is nothing to compare against and the whole tree is the
+    /// honest scope.
+    func base(for project: URL) -> String? {
+        if all { return nil }
+        if let since { return since }
+        return Discovery.defaultBase(in: project)
+    }
 }
