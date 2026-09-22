@@ -13,7 +13,7 @@ public struct ProjectInjection: Sendable {
     }
 
     /// Directories that never hold code worth mutating, and would make the copy
-    /// enormous.
+    /// enormous. Applied once, when the copy is made.
     static let skipped: Set<String> = [
         ".build", ".git", ".swiftpm", "build", "DerivedData",
         "Pods", "Carthage", "node_modules",
@@ -78,12 +78,10 @@ public struct ProjectInjection: Sendable {
 
         var files: [URL] = []
 
+        // Nothing here re-checks the skip list: rsync already left those
+        // directories out of the copy, so this walk cannot reach one. A
+        // mutation run found the check — deleting it broke no test.
         for case let url as URL in walker {
-            if Self.skipped.contains(url.lastPathComponent) {
-                walker.skipDescendants()
-                continue
-            }
-
             // Test code is the thing being measured, so mutating it would make
             // the suite grade itself.
             if url.lastPathComponent == "Tests" || url.lastPathComponent == "Test" {

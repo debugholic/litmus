@@ -37,7 +37,7 @@ struct Run: AsyncParsableCommand {
     @Option(help: "Scheme to build. Required with the xcode harness.")
     var scheme: String?
 
-    @Option(help: "Test processes to run at once. Only used by the swiftpm harness.")
+    @Option(help: "Test processes to run at once. The swiftpm harness supports 1.")
     var workers: Int = 1
 
     @Option(
@@ -142,14 +142,23 @@ struct Run: AsyncParsableCommand {
             )
 
         case .swiftpm:
-            guard workers >= 1 else {
-                throw ValidationError("--workers has to be at least 1")
+            // Two `swift test` processes in one package directory contend over
+            // .build, and the damage is not a slow run but a wrong one: the
+            // same mutant came back killed in parallel and survived in three
+            // sequential runs, and a baseline that had passed a minute earlier
+            // failed outright. A score reported too high is worse than no
+            // score, so this refuses rather than warns.
+            //
+            // Running each worker against its own copy of the project would
+            // make it sound, and is the way to lift this.
+            guard workers == 1 else {
+                throw ValidationError(
+                    "the swiftpm harness runs one mutant at a time: "
+                        + "parallel runs share .build and report wrong verdicts"
+                )
             }
 
-            return (
-                SwiftPackage(workingDirectory: project),
-                (1...workers).map { "worker \($0)" }
-            )
+            return (SwiftPackage(workingDirectory: project), ["worker 1"])
         }
     }
 
