@@ -58,6 +58,26 @@ struct MutationRunTests {
             defer { lock.unlock() }
             busyLanes.remove(lane)
         }
+
+        /// Blocks until `count` lanes are busy at once, or gives up.
+        ///
+        /// Sleeping a fixed time instead made this a race: on a loaded machine
+        /// three tasks that are meant to overlap simply did not, and the test
+        /// failed for a reason that had nothing to do with the scheduler.
+        /// Giving up rather than failing here keeps the last, partial batch
+        /// from hanging the run.
+        func awaitSaturation(_ count: Int, within seconds: TimeInterval) {
+            let deadline = Date().addingTimeInterval(seconds)
+
+            while Date() < deadline {
+                lock.lock()
+                let reached = busyLanes.count >= count
+                lock.unlock()
+
+                if reached { return }
+                usleep(1_000)
+            }
+        }
     }
 
     private struct StubHarness: TestHarness {
@@ -67,6 +87,8 @@ struct MutationRunTests {
         /// Keyed by switch name; anything missing passes, so the mutant survives.
         let outcomes: [String: TestOutput]
         let duration: TimeInterval
+        /// Lanes to wait for before returning, so overlap is not left to chance.
+        var saturate: Int = 0
 
         func build(lane: String) throws -> BuiltTests { BuiltTests() }
 
@@ -80,6 +102,7 @@ struct MutationRunTests {
             ledger.begin(lane: lane, mutantSwitch: mutantSwitch)
             defer { ledger.end(lane: lane) }
 
+            if saturate > 0 { ledger.awaitSaturation(saturate, within: 5) }
             if duration > 0 { Thread.sleep(forTimeInterval: duration) }
 
             guard let mutantSwitch else { return baseline }
@@ -106,6 +129,7 @@ struct MutationRunTests {
         baseline: TestOutput = passing,
         outcomes: [String: TestOutput] = [:],
         duration: TimeInterval = 0,
+        saturate: Int = 0,
         ledger: Ledger = Ledger()
     ) async throws -> MutationRun.Summary {
         try await MutationRun(
@@ -114,7 +138,8 @@ struct MutationRunTests {
                     ledger: ledger,
                     baseline: baseline,
                     outcomes: outcomes,
-                    duration: duration
+                    duration: duration,
+                    saturate: saturate
                 ),
                 lanes: lanes
             )
@@ -188,7 +213,7 @@ struct MutationRunTests {
         _ = try await run(
             (1...9).map(mutant),
             lanes: ["a", "b", "c"],
-            duration: 0.02,
+            saturate: 3,
             ledger: ledger
         )
 
@@ -206,7 +231,7 @@ struct MutationRunTests {
         _ = try await run(
             (1...12).map(mutant),
             lanes: ["a", "b"],
-            duration: 0.01,
+            saturate: 2,
             ledger: ledger
         )
 

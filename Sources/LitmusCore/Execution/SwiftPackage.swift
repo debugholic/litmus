@@ -29,7 +29,11 @@ public struct SwiftPackage: Sendable, TestHarness {
         let (log, status) = try run(arguments: ["build", "--build-tests"])
 
         guard status == 0 else {
-            throw Failure(description: "swift build --build-tests failed:\n\(log)")
+            throw Failure(description: """
+            the build failed:
+
+            \(Xcodebuild.errorLines(in: log))
+            """)
         }
 
         // Nothing to carry: `--skip-build` finds the products by itself.

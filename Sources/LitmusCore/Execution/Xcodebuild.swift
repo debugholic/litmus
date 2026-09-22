@@ -65,12 +65,23 @@ public struct Xcodebuild: Sendable, TestHarness {
         destination: String,
         derivedDataPath: URL
     ) throws -> URL {
-        _ = try run(arguments: [
+        let (log, status) = try run(arguments: [
             "build-for-testing",
             "-scheme", scheme,
             "-destination", destination,
             "-derivedDataPath", derivedDataPath.path,
         ])
+
+        // Checked, because a build that failed leaves no .xctestrun behind and
+        // the missing file is what used to get reported — with the compiler
+        // error that caused it nowhere on screen.
+        guard status == 0 else {
+            throw Failure(description: """
+            the build failed:
+
+            \(Self.errorLines(in: log))
+            """)
+        }
 
         let products = derivedDataPath.appendingPathComponent("Build/Products")
         let found = try FileManager.default
@@ -79,7 +90,10 @@ public struct Xcodebuild: Sendable, TestHarness {
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
 
         guard let xctestrun = found.first else {
-            throw Failure(description: "no .xctestrun under \(products.path)")
+            throw Failure(description: """
+            the build produced no .xctestrun under \(products.path) — \
+            does '\(scheme)' have a test target?
+            """)
         }
 
         return xctestrun
@@ -147,6 +161,23 @@ public struct Xcodebuild: Sendable, TestHarness {
         }
 
         return try Self.parse(report)
+    }
+
+    /// The part of a build log worth showing.
+    ///
+    /// xcodebuild's output runs to thousands of lines, and pasting all of it
+    /// buries the one line that says what went wrong.
+    static func errorLines(in log: String) -> String {
+        let errors = log
+            .split(separator: "\n")
+            .filter { $0.contains("error:") || $0.contains("** BUILD FAILED **") }
+            .prefix(20)
+
+        guard !errors.isEmpty else {
+            return String(log.split(separator: "\n").suffix(20).joined(separator: "\n"))
+        }
+
+        return errors.joined(separator: "\n")
     }
 
     static func parse(_ report: String) throws -> Coverage {
