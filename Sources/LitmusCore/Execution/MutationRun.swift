@@ -54,12 +54,25 @@ public struct MutationRun: Sendable {
         }
     }
 
+    /// What a run is doing, as it does it.
+    ///
+    /// A build and a test run are minutes each with nothing to show for them,
+    /// and silence on a terminal reads as a hang. Every step that can take
+    /// minutes says so before it starts.
+    public enum Step: Sendable {
+        case building
+        case checkingBaseline
+        case baselinePassed(TimeInterval)
+        case started(Mutant)
+        case finished(MutantResult, done: Int, of: Int)
+    }
+
     let configuration: Configuration
-    let progress: @Sendable (MutantResult) -> Void
+    let progress: @Sendable (Step) -> Void
 
     public init(
         configuration: Configuration,
-        progress: @escaping @Sendable (MutantResult) -> Void = { _ in }
+        progress: @escaping @Sendable (Step) -> Void = { _ in }
     ) {
         self.configuration = configuration
         self.progress = progress
@@ -69,11 +82,15 @@ public struct MutationRun: Sendable {
         let started = Date()
         let harness = configuration.harness
 
+        progress(.building)
         let built = try harness.build(lane: configuration.lanes[0])
 
         // Every mutant is compiled in but switched off here, so this is the
         // project's own suite. Measuring against a red baseline would report
         // mutants as killed by failures that were already there.
+        progress(.checkingBaseline)
+        let baselineStarted = Date()
+
         let baseline = try harness.test(
             built,
             lane: configuration.lanes[0],
@@ -83,6 +100,8 @@ public struct MutationRun: Sendable {
         guard baselineVerdict == .survived else {
             throw Failure.baselineNotGreen(baselineVerdict)
         }
+
+        progress(.baselinePassed(Date().timeIntervalSince(baselineStarted)))
 
         // Each task hands its lane back, because that is the one that just came
         // free. Picking by a counter instead would stack two mutants on one
@@ -97,6 +116,7 @@ public struct MutationRun: Sendable {
             // read what the build produced, so nothing serialises them.
             for lane in configuration.lanes {
                 guard let mutant = pending.popFirst() else { break }
+                progress(.started(mutant))
                 group.addTask {
                     (try run(mutant, in: lane, built: built, using: harness), lane)
                 }
@@ -104,10 +124,11 @@ public struct MutationRun: Sendable {
 
             while let finished = try await group.next() {
                 collected.append(finished.result)
-                progress(finished.result)
+                progress(.finished(finished.result, done: collected.count, of: mutants.count))
 
                 if let mutant = pending.popFirst() {
                     let lane = finished.lane
+                    progress(.started(mutant))
                     group.addTask {
                         (try run(mutant, in: lane, built: built, using: harness), lane)
                     }
