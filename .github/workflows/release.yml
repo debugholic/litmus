@@ -39,12 +39,20 @@ jobs:
         run: |
           BIN=$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/litmus
           file "$BIN"
-          # Anything outside /usr/lib and /System is a library the installing
-          # machine has no reason to have.
-          if otool -L "$BIN" | tail -n +2 | grep -vE '^\s+(/usr/lib/|/System/)'; then
-            echo "::error::the binary links something outside the system"
-            exit 1
-          fi
+
+          # Per architecture: `otool -L` on a universal binary prints a
+          # "(architecture x86_64):" header for each slice, and those lines are
+          # not paths, so a plain grep reads them as foreign libraries.
+          for arch in arm64 x86_64; do
+            # Anything outside /usr/lib and /System is a library the installing
+            # machine has no reason to have.
+            if otool -arch "$arch" -L "$BIN" | tail -n +2 \
+                 | grep -vE '^[[:space:]]+(/usr/lib/|/System/)'; then
+              echo "::error::the $arch slice links something outside the system"
+              exit 1
+            fi
+          done
+
           "$BIN" --help > /dev/null
 
       - name: Package
