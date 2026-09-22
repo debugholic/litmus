@@ -32,6 +32,21 @@ jobs:
       - name: Test
         run: swift test
 
+      # Stamped rather than kept in step with the tag by hand: the two drift,
+      # and the formula's own test compares `litmus --version` against the
+      # version it installed.
+      - name: Stamp the version
+        run: |
+          set -euo pipefail
+          V="${{ steps.version.outputs.tag }}"
+          sed -i '' "s/static let version = \".*\"/static let version = \"${V#v}\"/" \
+            Sources/litmus/Litmus.swift
+
+          # Checked, because a rename would leave the sed matching nothing and
+          # ship a binary that calls itself "dev" without a word.
+          grep -q "static let version = \"${V#v}\"" Sources/litmus/Litmus.swift \
+            || { echo "::error::the version stamp did not apply"; exit 1; }
+
       - name: Build
         run: swift build -c release --arch arm64 --arch x86_64
 
@@ -54,6 +69,12 @@ jobs:
           done
 
           "$BIN" --help > /dev/null
+
+          # The formula asserts this against the version it installed.
+          [ "$("$BIN" --version)" = "${TAG#v}" ] \
+            || { echo "::error::binary reports $("$BIN" --version), not ${TAG#v}"; exit 1; }
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
 
       - name: Package
         id: package

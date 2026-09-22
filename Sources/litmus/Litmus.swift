@@ -12,9 +12,12 @@ struct Litmus: AsyncParsableCommand {
         setvbuf(stdout, nil, _IOLBF, 0)
     }
 
-    /// Set from the tag at release time. A build from source says so rather
-    /// than claiming a version it is not.
-    static let version = "0.1.1"
+    /// Replaced with the tag when a release is built.
+    ///
+    /// A build from source says "dev" rather than claiming a version it is
+    /// not. The release workflow rewrites this line and checks that it took,
+    /// so a rename here cannot quietly ship an unstamped binary.
+    static let version = "dev"
 
     static let configuration = CommandConfiguration(
         commandName: "litmus",
