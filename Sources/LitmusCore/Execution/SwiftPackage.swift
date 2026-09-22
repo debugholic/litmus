@@ -71,7 +71,7 @@ public struct SwiftPackage: Sendable, TestHarness {
     public func coverage(lane: String) throws -> Coverage {
         let (log, status) = try run(arguments: ["test", "--enable-code-coverage"])
         guard status == 0 else {
-            throw Failure(description: "coverage run failed:\n\(log)")
+            throw Failure(description: Xcodebuild.suiteFailure(in: log))
         }
 
         let profile = try codecovDirectory().appendingPathComponent("default.profdata")

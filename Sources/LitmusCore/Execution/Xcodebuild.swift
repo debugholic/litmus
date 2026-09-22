@@ -148,7 +148,7 @@ public struct Xcodebuild: Sendable, TestHarness {
         ])
 
         guard status == 0 else {
-            throw Failure(description: "coverage run failed:\n\(log)")
+            throw Failure(description: Self.suiteFailure(in: log))
         }
 
         let (report, reportStatus) = try run(
@@ -161,6 +161,39 @@ public struct Xcodebuild: Sendable, TestHarness {
         }
 
         return try Self.parse(report)
+    }
+
+    /// Why a coverage run did not finish.
+    ///
+    /// Almost always the suite itself: mutation testing compares against a
+    /// green baseline, so a red one stops the run here rather than at the
+    /// baseline gate a few minutes later. The failing test names are the
+    /// actionable part, and dumping the whole xcodebuild log buries them.
+    static func suiteFailure(in log: String) -> String {
+        let lines = log.split(separator: "\n").map(String.init)
+
+        if let start = lines.firstIndex(where: { $0.hasPrefix("Failing tests:") }) {
+            let failures = lines[start...]
+                .dropFirst()
+                .prefix { $0.hasPrefix("\t") || $0.hasPrefix("    ") }
+                .map { "  " + $0.trimmingCharacters(in: .whitespaces) }
+
+            return """
+            the test suite is failing, so there is no green baseline to \
+            measure against:
+
+            \(failures.joined(separator: "\n"))
+
+            Fix those first, or pass --no-coverage to skip this step — the \
+            baseline check will stop the run anyway.
+            """
+        }
+
+        return """
+        the coverage run did not finish:
+
+        \(errorLines(in: log))
+        """
     }
 
     /// The part of a build log worth showing.

@@ -250,3 +250,42 @@ struct HarnessTests {
         }
     }
 }
+
+/// What a failed coverage run says.
+///
+/// Mutation testing needs a green baseline, so a red suite stops the run at
+/// the coverage step. Dumping the xcodebuild log there buries the one thing
+/// worth reading: which tests are failing.
+@Suite("Coverage failures")
+struct CoverageFailureTests {
+    @Test("names the failing tests")
+    func namesFailures() {
+        let message = Xcodebuild.suiteFailure(in: """
+        2026-09-22 17:55:57.225 xcodebuild[19568:1701291] [MT] 303.243 sec -- end
+
+        Failing tests:
+        \tExceedWordbookLimitPopOverViewControllerTests.hostingControllerIsNotNilAfterLoad()
+        \tOtherTests.somethingElse()
+
+        ** TEST FAILED **
+        """)
+
+        #expect(message.contains("the test suite is failing"))
+        #expect(message.contains("ExceedWordbookLimitPopOverViewControllerTests"))
+        #expect(message.contains("OtherTests.somethingElse()"))
+        #expect(!message.contains("IDETestOperationsObserverDebug"))
+    }
+
+    @Test("falls back to the error lines when no test is named")
+    func noNamedFailures() {
+        let message = Xcodebuild.suiteFailure(in: """
+        Noise about something.
+        error: Scheme MyApp is not configured for testing
+        ** TEST FAILED **
+        """)
+
+        #expect(message.contains("did not finish"))
+        #expect(message.contains("not configured for testing"))
+        #expect(!message.contains("Noise about"))
+    }
+}
