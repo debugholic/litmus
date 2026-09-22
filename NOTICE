@@ -1,0 +1,12 @@
+Litmus includes code derived from Muter.
+
+    https://github.com/muter-mutation-testing/muter
+    MIT License, Copyright (c) 2020 Muter
+
+The mutation operators, the schemata rewriter and the report formatters are
+adapted from that project. The execution layer is not: Muter drives its test
+runs by rewriting the .xctestrun property list for every mutant, while Litmus
+passes the mutant switch through the documented TEST_RUNNER_<VAR> interface of
+xcodebuild and leaves the .xctestrun untouched.
+
+A full copy of the Muter license is kept in LICENSES/muter-MIT.txt.
