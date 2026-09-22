@@ -61,31 +61,10 @@ extension Coverage {
         var rebased: [String: File] = [:]
 
         for path in paths {
-            guard let source = bestMatch(for: path) else { continue }
+            guard let source = PathMatch.best(for: path, among: files.keys) else { continue }
             rebased[path] = files[source]
         }
 
         return Coverage(files: rebased)
-    }
-
-    private func bestMatch(for path: String) -> String? {
-        let wanted = path.split(separator: "/").reversed().map(String.init)
-        var best: (source: String, score: Int)?
-
-        for source in files.keys {
-            let candidate = source.split(separator: "/").reversed().map(String.init)
-
-            var score = 0
-            while score < wanted.count, score < candidate.count, wanted[score] == candidate[score] {
-                score += 1
-            }
-
-            // A shared file name alone is not a match: two modules can both
-            // hold a Configuration.swift.
-            guard score > 1, score > (best?.score ?? 1) else { continue }
-            best = (source, score)
-        }
-
-        return best?.source
     }
 }

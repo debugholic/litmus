@@ -45,6 +45,35 @@ $ litmus run --project . --plan litmus-plan.json \
 `--format plain|json|html|xcode` and `--output <path>` control the report;
 `xcode` emits `warning:` lines Xcode shows beside the mutated line.
 
+### Skipping what no test reaches
+
+A mutant on a line no test runs cannot be killed. It will survive whatever the
+code says, and the only thing running it buys is the minute it took.
+
+```
+$ litmus inject --project . --output /tmp/mutated \
+                --skip-coverage --harness swiftpm
+
+measuring coverage first…
+  89 file(s) with nothing running in them
+
+  75 mutants across 12 file(s)
+  12 skipped — no test reaches them
+```
+
+Litmus runs the suite once with coverage on and filters before writing, so a
+skipped mutant costs neither a run nor the file growth. Coverage is measured on
+the project as written: injecting moves every line below the first mutant, and
+a plan's positions are positions in the original.
+
+The `swiftpm` harness filters line by line, through `llvm-cov export -format=lcov`.
+The `xcode` harness filters whole files, through `xccov view --report`, which
+gives line detail only one file per invocation.
+
+Anything the report is silent about is kept. Dropping a mutant that could have
+been killed hides a hole, which is the one failure this tool exists to prevent;
+keeping one that cannot costs a single run.
+
 ### Two ways to run the tests
 
 `--harness xcode` builds a scheme and runs it on a simulator. Pass
@@ -125,8 +154,11 @@ harnesses, on runs of tens of mutants rather than thousands.
 Litmus is run against itself. Its own score is 61%, and the survivors are in
 the parts that touch the filesystem and spawn processes.
 
-Not there yet: a Homebrew tap, prebuilt binaries, and more than one worker on
-the `swiftpm` harness.
+Not there yet: a Homebrew tap, prebuilt binaries, line-level coverage on the
+`xcode` harness, and more than one worker on the `swiftpm` harness. Two
+`swift test` processes in one package directory contend over `.build` and
+report verdicts that disagree with a sequential run, so that is refused rather
+than warned about.
 
 ## License
 

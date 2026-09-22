@@ -23,6 +23,9 @@ struct Inject: AsyncParsableCommand {
     @Flag(help: "Run the suite once with coverage first, and skip what it never reaches.")
     var skipCoverage = false
 
+    @Option(help: "Only mutate lines changed since this git ref, as a review would look at.")
+    var changedSince: String?
+
     @OptionGroup var harness: HarnessOptions
 
     func run() async throws {
@@ -30,6 +33,22 @@ struct Inject: AsyncParsableCommand {
         let workingCopy = output.map { URL(fileURLWithPath: $0) }
             ?? project.deletingLastPathComponent()
                 .appendingPathComponent(project.lastPathComponent + "_litmus")
+
+        var changed: ChangedLines?
+        if let changedSince {
+            let diff = try GitDiff.changed(since: changedSince, in: project)
+
+            guard !diff.isEmpty else {
+                throw ValidationError("nothing changed since '\(changedSince)'")
+            }
+
+            changed = diff
+
+            // Said as "in the diff", not "to be mutated". The diff covers test
+            // files and anything else written in Swift, and injection leaves
+            // those alone; the count below is the one that says what ran.
+            print("\(diff.fileCount) Swift file(s) in the diff against \(changedSince)")
+        }
 
         // Measured on the project as written. Positions in a plan are
         // positions in the original file, and injecting moves every line below
@@ -51,7 +70,7 @@ struct Inject: AsyncParsableCommand {
 
         print("copying to \(workingCopy.path)…")
 
-        let result = try ProjectInjection(include: only, coverage: coverage)(
+        let result = try ProjectInjection(include: only, coverage: coverage, changed: changed)(
             project: project,
             workingCopy: workingCopy
         ) { print("  \($0)") }
@@ -59,8 +78,11 @@ struct Inject: AsyncParsableCommand {
         guard !result.mutants.isEmpty else {
             throw ValidationError("nothing to mutate"
                 + (only.map { " under '\($0)'" } ?? "")
+                + (result.unchanged > 0
+                    ? "; \(result.unchanged) were outside the change"
+                    : "")
                 + (result.uncovered > 0
-                    ? "; \(result.uncovered) mutant(s) were dropped as unreachable"
+                    ? "; \(result.uncovered) were unreachable"
                     : ""))
         }
 
@@ -72,6 +94,9 @@ struct Inject: AsyncParsableCommand {
 
           \(result.mutants.count) mutants across \
         \(Set(result.mutants.map(\.fileName)).count) file(s)\
+        \(result.unchanged > 0
+            ? "\n  \(result.unchanged) skipped — outside the change"
+            : "")\
         \(result.uncovered > 0
             ? "\n  \(result.uncovered) skipped — no test reaches them"
             : "")

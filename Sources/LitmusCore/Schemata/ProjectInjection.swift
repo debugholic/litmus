@@ -12,6 +12,8 @@ public struct ProjectInjection: Sendable {
         public let untouched: Int
         /// Mutants dropped because no test reaches them.
         public let uncovered: Int
+        /// Mutants dropped because the change did not touch them.
+        public let unchanged: Int
     }
 
     /// Directories that never hold code worth mutating, and would make the copy
@@ -27,15 +29,21 @@ public struct ProjectInjection: Sendable {
     /// written: they would survive whatever the code did, and each one costs a
     /// run to learn nothing.
     public let coverage: Coverage?
+    /// The lines a change touched, if a range was given. Everything else keeps
+    /// the verdict it had on the last run, so re-earning it costs time and
+    /// tells nobody anything.
+    public let changed: ChangedLines?
 
     public init(
         injector: SchemataInjector = SchemataInjector(),
         include: String? = nil,
-        coverage: Coverage? = nil
+        coverage: Coverage? = nil,
+        changed: ChangedLines? = nil
     ) {
         self.injector = injector
         self.include = include
         self.coverage = coverage
+        self.changed = changed
     }
 
     public func callAsFunction(
@@ -48,6 +56,7 @@ public struct ProjectInjection: Sendable {
         var mutants: [Mutant] = []
         var untouched = 0
         var uncovered = 0
+        var unchanged = 0
 
         let files = try swiftFiles(in: workingCopy)
 
@@ -55,6 +64,7 @@ public struct ProjectInjection: Sendable {
         // original tree. Re-keying it onto the copy is what makes the lookup
         // below match anything at all.
         let coverage = coverage?.rebased(onto: files.map(\.path))
+        let changed = changed?.rebased(onto: files.map(\.path))
 
         for file in files {
             if let include, !file.path.contains(include) { continue }
@@ -68,10 +78,15 @@ public struct ProjectInjection: Sendable {
             // Filtered before the file is written, not after: a mutant no test
             // reaches would otherwise still be compiled in and still grow the
             // file, for a verdict that is known in advance.
-            let reachable = result.mutants.filter {
+            let touched = result.mutants.filter {
+                changed?.includes(path: file.path, line: $0.line) ?? true
+            }
+            unchanged += result.mutants.count - touched.count
+
+            let reachable = touched.filter {
                 coverage?.reaches(path: file.path, line: $0.line) ?? true
             }
-            uncovered += result.mutants.count - reachable.count
+            uncovered += touched.count - reachable.count
 
             guard !reachable.isEmpty else {
                 untouched += 1
@@ -87,7 +102,8 @@ public struct ProjectInjection: Sendable {
             workingCopy: workingCopy,
             mutants: mutants,
             untouched: untouched,
-            uncovered: uncovered
+            uncovered: uncovered,
+            unchanged: unchanged
         )
     }
 
