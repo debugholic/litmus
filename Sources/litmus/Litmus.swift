@@ -5,6 +5,13 @@ import Rainbow
 
 @main
 struct Litmus: AsyncParsableCommand {
+    init() {
+        // A run takes minutes, and stdout is block-buffered when it is not a
+        // terminal: piped to a file or a CI log, every line of progress would
+        // arrive at the end, after the part worth watching is over.
+        setvbuf(stdout, nil, _IOLBF, 0)
+    }
+
     static let configuration = CommandConfiguration(
         commandName: "litmus",
         abstract: "Mutation testing for Swift.",
@@ -24,8 +31,14 @@ struct Run: AsyncParsableCommand {
     @Option(help: "Mutant list, as written by 'muter mutate-without-running'.")
     var plan: String
 
-    @Option(help: "Scheme to build.")
-    var scheme: String
+    @Option(help: "How to run the tests: xcode or swiftpm.")
+    var harness: HarnessKind = .xcode
+
+    @Option(help: "Scheme to build. Required with the xcode harness.")
+    var scheme: String?
+
+    @Option(help: "Test processes to run at once. Only used by the swiftpm harness.")
+    var workers: Int = 1
 
     @Option(
         parsing: .upToNextOption,
@@ -57,12 +70,7 @@ struct Run: AsyncParsableCommand {
             throw ValidationError("the plan contains no mutants")
         }
 
-        let destinations = simulators.map { "platform=iOS Simulator,id=\($0)" }
-            .nilIfEmpty ?? [destination].compactMap { $0 }
-
-        guard !destinations.isEmpty else {
-            throw ValidationError("pass --simulators or --destination")
-        }
+        let (testHarness, lanes) = try harness(for: project)
 
         // A mutant listed in the plan but absent from the source would run as a
         // false survivor, so drop it and say so rather than scoring it.
@@ -86,16 +94,11 @@ struct Run: AsyncParsableCommand {
             throw ValidationError("no mutant from the plan is present in the source")
         }
 
-        print("\(mutants.count) mutants, \(destinations.count) worker(s)")
+        print("\(mutants.count) mutants, \(lanes.count) \(testHarness.laneNoun)(s)")
         print("  checking the baseline first…\n")
 
         let run = MutationRun(
-            configuration: .init(
-                project: project,
-                scheme: scheme,
-                destinations: destinations,
-                derivedDataPath: project.appendingPathComponent("build/litmus")
-            ),
+            configuration: .init(harness: testHarness, lanes: lanes),
             progress: { Self.report($0) }
         )
 
@@ -107,6 +110,46 @@ struct Run: AsyncParsableCommand {
             print("\n  report written to \(output)")
         } else {
             print("\n" + rendered)
+        }
+    }
+
+    /// The harness to run with, and one lane per worker.
+    ///
+    /// A simulator is a real lane — a mutant runs on one at a time. A Swift
+    /// package has no such thing, so a lane there is just a slot, and the names
+    /// only have to be distinct.
+    private func harness(for project: URL) throws -> (any TestHarness, [String]) {
+        switch harness {
+        case .xcode:
+            guard let scheme else {
+                throw ValidationError("--scheme is required with the xcode harness")
+            }
+
+            let destinations = simulators.map { "platform=iOS Simulator,id=\($0)" }
+                .nilIfEmpty ?? [destination].compactMap { $0 }
+
+            guard !destinations.isEmpty else {
+                throw ValidationError("pass --simulators or --destination")
+            }
+
+            return (
+                Xcodebuild(
+                    workingDirectory: project,
+                    scheme: scheme,
+                    derivedDataPath: project.appendingPathComponent("build/litmus")
+                ),
+                destinations
+            )
+
+        case .swiftpm:
+            guard workers >= 1 else {
+                throw ValidationError("--workers has to be at least 1")
+            }
+
+            return (
+                SwiftPackage(workingDirectory: project),
+                (1...workers).map { "worker \($0)" }
+            )
         }
     }
 
@@ -154,3 +197,12 @@ private extension Array {
 }
 
 extension ReportFormat: ExpressibleByArgument {}
+
+/// Which harness the run uses.
+enum HarnessKind: String, ExpressibleByArgument, CaseIterable {
+    /// Builds a scheme and runs it on a simulator.
+    case xcode
+    /// Runs the package's own tests on this machine. No simulator, so a mutant
+    /// costs the tests rather than a simulator round trip.
+    case swiftpm
+}

@@ -6,17 +6,54 @@ import Foundation
 /// not read DerivedData's internal layout, parse build descriptions or rewrite
 /// the generated `.xctestrun`; those are private to Xcode and change between
 /// releases without notice.
-public struct Xcodebuild: Sendable {
+public struct Xcodebuild: Sendable, TestHarness {
     public struct Failure: Error, CustomStringConvertible {
         public let description: String
     }
 
+    public let laneNoun = "simulator"
+
     let executable: String
     let workingDirectory: URL
+    let scheme: String
+    let derivedDataPath: URL
 
-    public init(executable: String = "/usr/bin/xcodebuild", workingDirectory: URL) {
+    public init(
+        executable: String = "/usr/bin/xcodebuild",
+        workingDirectory: URL,
+        scheme: String,
+        derivedDataPath: URL
+    ) {
         self.executable = executable
         self.workingDirectory = workingDirectory
+        self.scheme = scheme
+        self.derivedDataPath = derivedDataPath
+    }
+
+    public func build(lane: String) throws -> BuiltTests {
+        BuiltTests(
+            artifact: try buildForTesting(
+                scheme: scheme,
+                destination: lane,
+                derivedDataPath: derivedDataPath
+            )
+        )
+    }
+
+    public func test(
+        _ built: BuiltTests,
+        lane: String,
+        switchOn mutantSwitch: String?
+    ) throws -> TestOutput {
+        guard let xctestrun = built.artifact else {
+            throw Failure(description: "no .xctestrun to run")
+        }
+
+        return try testWithoutBuilding(
+            xctestrun: xctestrun,
+            destination: lane,
+            switchOn: mutantSwitch
+        )
     }
 
     /// Builds the tests once, with every mutant compiled in but switched off.
@@ -58,7 +95,7 @@ public struct Xcodebuild: Sendable {
         destination: String,
         switchOn mutantSwitch: String? = nil,
         onlyTesting: [String] = []
-    ) throws -> String {
+    ) throws -> TestOutput {
         var arguments = [
             "test-without-building",
             "-xctestrun", xctestrun.path,
@@ -71,14 +108,16 @@ public struct Xcodebuild: Sendable {
             environment["TEST_RUNNER_\(mutantSwitch)"] = "YES"
         }
 
-        return try run(arguments: arguments, environment: environment)
+        let (log, status) = try run(arguments: arguments, environment: environment)
+
+        return TestOutput(log: log, status: status)
     }
 
     @discardableResult
     private func run(
         arguments: [String],
         environment: [String: String] = [:]
-    ) throws -> String {
+    ) throws -> (log: String, status: Int32) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -96,6 +135,6 @@ public struct Xcodebuild: Sendable {
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
 
-        return String(data: data, encoding: .utf8) ?? ""
+        return (String(data: data, encoding: .utf8) ?? "", process.terminationStatus)
     }
 }

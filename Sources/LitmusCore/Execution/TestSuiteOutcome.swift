@@ -7,6 +7,10 @@ import Foundation
 struct TestSuiteOutcome {
     let verdict: Verdict
 
+    init(_ output: TestOutput) {
+        self.init(log: output.log)
+    }
+
     init(log: String) {
         // swift-testing and XCTest print different summary lines, and a run can
         // end without either when the build or the runner fell over.

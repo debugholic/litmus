@@ -3,22 +3,15 @@ import Foundation
 /// Drives one mutation testing run: build once, then flip mutants on one at a time.
 public struct MutationRun: Sendable {
     public struct Configuration: Sendable {
-        public let project: URL
-        public let scheme: String
-        /// Simulators to spread the work over. One entry means sequential.
-        public let destinations: [String]
-        public let derivedDataPath: URL
+        /// How the project's tests get built and run.
+        public let harness: any TestHarness
+        /// One lane per worker: a simulator for xcodebuild, a plain slot for a
+        /// Swift package. One entry means sequential.
+        public let lanes: [String]
 
-        public init(
-            project: URL,
-            scheme: String,
-            destinations: [String],
-            derivedDataPath: URL
-        ) {
-            self.project = project
-            self.scheme = scheme
-            self.destinations = destinations
-            self.derivedDataPath = derivedDataPath
+        public init(harness: any TestHarness, lanes: [String]) {
+            self.harness = harness
+            self.lanes = lanes
         }
     }
 
@@ -74,41 +67,38 @@ public struct MutationRun: Sendable {
 
     public func callAsFunction(_ mutants: [Mutant]) async throws -> Summary {
         let started = Date()
-        let xcodebuild = Xcodebuild(workingDirectory: configuration.project)
+        let harness = configuration.harness
 
-        let xctestrun = try xcodebuild.buildForTesting(
-            scheme: configuration.scheme,
-            destination: configuration.destinations[0],
-            derivedDataPath: configuration.derivedDataPath
-        )
+        let built = try harness.build(lane: configuration.lanes[0])
 
         // Every mutant is compiled in but switched off here, so this is the
         // project's own suite. Measuring against a red baseline would report
         // mutants as killed by failures that were already there.
-        let baseline = try xcodebuild.testWithoutBuilding(
-            xctestrun: xctestrun,
-            destination: configuration.destinations[0]
+        let baseline = try harness.test(
+            built,
+            lane: configuration.lanes[0],
+            switchOn: nil
         )
-        let baselineVerdict = TestSuiteOutcome(log: baseline).verdict
+        let baselineVerdict = TestSuiteOutcome(baseline).verdict
         guard baselineVerdict == .survived else {
             throw Failure.baselineNotGreen(baselineVerdict)
         }
 
-        // Each task hands its simulator back, because that is the one that just
-        // came free. Picking by a counter instead would stack two mutants on
-        // one simulator while another sat idle.
+        // Each task hands its lane back, because that is the one that just came
+        // free. Picking by a counter instead would stack two mutants on one
+        // simulator while another sat idle.
         let results = try await withThrowingTaskGroup(
-            of: (result: MutantResult, destination: String).self
+            of: (result: MutantResult, lane: String).self
         ) { group in
             var pending = mutants[...]
             var collected: [MutantResult] = []
 
-            // One in flight per destination. Each worker owns a simulator, and
-            // they share the .xctestrun read-only, so nothing serialises them.
-            for destination in configuration.destinations {
+            // One in flight per lane. Each worker owns its lane, and they only
+            // read what the build produced, so nothing serialises them.
+            for lane in configuration.lanes {
                 guard let mutant = pending.popFirst() else { break }
                 group.addTask {
-                    (try run(mutant, on: destination, xctestrun: xctestrun, using: xcodebuild), destination)
+                    (try run(mutant, in: lane, built: built, using: harness), lane)
                 }
             }
 
@@ -117,9 +107,9 @@ public struct MutationRun: Sendable {
                 progress(finished.result)
 
                 if let mutant = pending.popFirst() {
-                    let destination = finished.destination
+                    let lane = finished.lane
                     group.addTask {
-                        (try run(mutant, on: destination, xctestrun: xctestrun, using: xcodebuild), destination)
+                        (try run(mutant, in: lane, built: built, using: harness), lane)
                     }
                 }
             }
@@ -132,20 +122,16 @@ public struct MutationRun: Sendable {
 
     private func run(
         _ mutant: Mutant,
-        on destination: String,
-        xctestrun: URL,
-        using xcodebuild: Xcodebuild
+        in lane: String,
+        built: BuiltTests,
+        using harness: any TestHarness
     ) throws -> MutantResult {
         let started = Date()
-        let log = try xcodebuild.testWithoutBuilding(
-            xctestrun: xctestrun,
-            destination: destination,
-            switchOn: mutant.switchName
-        )
+        let log = try harness.test(built, lane: lane, switchOn: mutant.switchName)
 
         return MutantResult(
             mutant: mutant,
-            verdict: TestSuiteOutcome(log: log).verdict,
+            verdict: TestSuiteOutcome(log).verdict,
             duration: Date().timeIntervalSince(started)
         )
     }
