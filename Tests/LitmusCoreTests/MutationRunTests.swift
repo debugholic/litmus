@@ -98,7 +98,8 @@ struct MutationRunTests {
             _ built: BuiltTests,
             lane: String,
             switchOn mutantSwitch: String?,
-            timeout: TimeInterval?
+            timeout: TimeInterval?,
+            onlyTesting target: String?
         ) throws -> TestOutput {
             ledger.begin(lane: lane, mutantSwitch: mutantSwitch)
             defer { ledger.end(lane: lane) }
@@ -258,18 +259,27 @@ struct MutationRunTests {
         #expect(summary.score == nil)
     }
 
-    // MARK: - batching
+    // MARK: - target by target
 
-    /// Runs a batch by handing every id to the stub, and records which ids
-    /// went through the batch and which got a process of their own.
-    private final class BatchStub: BatchingHarness, @unchecked Sendable {
+    /// Test targets, each aimed at some files, with verdicts chosen per
+    /// target. Records what ran where, in a batch or a process of its own.
+    private final class TargetStub: BatchingHarness, @unchecked Sendable {
         let laneNoun = "lane"
-        let testFile: String
-        private let lock = NSLock()
-        private(set) var batchedIDs: [String] = []
-        private(set) var separateIDs: [String] = []
+        let targets: [TestedScope.TestTarget]
+        /// Keyed by target, then switch name; anything missing survives.
+        let kills: [String: Set<String>]
+        let redBaselines: Set<String>
 
-        init(testFile: String) { self.testFile = testFile }
+        private let lock = NSLock()
+        private(set) var batched: [String: [String]] = [:]
+        private(set) var separate: [String: [String]] = [:]
+        private(set) var prepared: [String] = []
+
+        init(targets: [TestedScope.TestTarget], kills: [String: Set<String>] = [:], redBaselines: Set<String> = []) {
+            self.targets = targets
+            self.kills = kills
+            self.redBaselines = redBaselines
+        }
 
         func build(lane: String) throws -> BuiltTests { BuiltTests() }
         func coverage(lane: String) throws -> Coverage { Coverage(files: [:]) }
@@ -277,59 +287,199 @@ struct MutationRunTests {
         func testedScope(_ built: BuiltTests) -> TestedScope? {
             TestedScope(
                 modules: ["Sample"],
-                files: ["/project/Sample.swift"],
-                testTargets: [.init(name: "SampleTests", files: [testFile])]
+                files: Set(targets.flatMap(\.aimedAt)),
+                testTargets: targets
             )
         }
 
         func test(
-            _ built: BuiltTests, lane: String, switchOn mutantSwitch: String?, timeout: TimeInterval?
+            _ built: BuiltTests, lane: String, switchOn mutantSwitch: String?,
+            timeout: TimeInterval?, onlyTesting target: String?
         ) throws -> TestOutput {
+            let target = target ?? "-"
             lock.lock()
             defer { lock.unlock() }
-            if let mutantSwitch { separateIDs.append(mutantSwitch) }
-            return MutationRunTests.passing
+
+            guard let mutantSwitch else {
+                return redBaselines.contains(target) ? MutationRunTests.failing : MutationRunTests.passing
+            }
+            separate[target, default: []].append(mutantSwitch)
+            return kills[target]?.contains(mutantSwitch) == true ? MutationRunTests.failing : MutationRunTests.passing
         }
 
-        func prepareBatch(_ built: BuiltTests, scope: TestedScope, lane: String) throws -> Batch.Plan? {
-            Batch.Plan(built: built, testTarget: "SampleTests")
+        func prepareBatch(_ built: BuiltTests, targets: [TestedScope.TestTarget], lane: String) throws -> Batch.Plan {
+            lock.lock()
+            prepared = targets.map(\.name)
+            lock.unlock()
+            return Batch.Plan(built: built)
         }
 
         func runBatch(
             _ plan: Batch.Plan,
+            target: String,
             lane: String,
             ids: [String],
             timeouts: Batch.Timeouts,
             onEvent: (Batch.Event) -> Void
         ) throws -> [String: Verdict] {
             lock.lock()
-            batchedIDs.append(contentsOf: ids)
-            lock.unlock()
-            return Dictionary(uniqueKeysWithValues: ids.map { ($0, .survived) })
+            defer { lock.unlock() }
+            batched[target, default: []].append(contentsOf: ids)
+
+            return Dictionary(uniqueKeysWithValues: ids.map { id in
+                if id == Batch.baseline {
+                    return (id, redBaselines.contains(target) ? .killed : .survived)
+                }
+                return (id, kills[target]?.contains(id) == true ? .killed : .survived)
+            })
         }
+    }
+
+    /// A test source that imports Testing, so the target can be batched.
+    private final class TestSource {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("litmus-\(UUID().uuidString).swift")
+
+        init(_ text: String = "import Testing\n") throws {
+            try text.write(to: url, atomically: true, encoding: .utf8)
+        }
+
+        deinit { try? FileManager.default.removeItem(at: url) }
+    }
+
+    private func mutant(_ line: Int, in file: String, once: Bool = false) -> Mutant {
+        Mutant(
+            filePath: file, line: line, column: 1, utf8Offset: line,
+            operator: "RelationalOperatorReplacement", description: "d", evaluatedOnce: once
+        )
     }
 
     @Test("gives a value Swift computes once a process of its own")
     func evaluatedOnceLeavesTheBatch() async throws {
-        let testFile = FileManager.default.temporaryDirectory
-            .appendingPathComponent("litmus-\(UUID().uuidString).swift")
-        try "import Testing\n".write(to: testFile, atomically: true, encoding: .utf8)
-        defer { try? FileManager.default.removeItem(at: testFile) }
-
-        let once = Mutant(
-            filePath: "/project/Sample.swift", line: 1, column: 1, utf8Offset: 1,
-            operator: "RelationalOperatorReplacement", description: "d", evaluatedOnce: true
-        )
-        let others = [mutant(2), mutant(3)]
-        let harness = BatchStub(testFile: testFile.path)
+        let source = try TestSource()
+        let once = mutant(1, in: "/project/A.swift", once: true)
+        let others = [mutant(2, in: "/project/A.swift"), mutant(3, in: "/project/A.swift")]
+        let harness = TargetStub(targets: [
+            .init(name: "ATests", files: [source.url.path], aimedAt: ["/project/A.swift"]),
+        ])
 
         let summary = try await MutationRun(
             configuration: .init(harness: harness, lanes: ["a"])
         )(others + [once])
 
-        #expect(harness.separateIDs == [once.switchName])
-        #expect(harness.batchedIDs == [Batch.baseline] + others.map(\.switchName))
+        #expect(harness.separate["ATests"] == [once.switchName])
+        #expect(harness.batched["ATests"] == [Batch.baseline] + others.map(\.switchName))
         #expect(summary.results.count == 3)
+    }
+
+    @Test("runs each mutant in the target aimed at its file")
+    func routesByTarget() async throws {
+        let a = try TestSource(), b = try TestSource()
+        let inA = mutant(1, in: "/project/A.swift")
+        let inB = mutant(2, in: "/project/B.swift")
+        let harness = TargetStub(targets: [
+            .init(name: "ATests", files: [a.url.path], aimedAt: ["/project/A.swift"]),
+            .init(name: "BTests", files: [b.url.path], aimedAt: ["/project/B.swift"]),
+        ])
+
+        _ = try await MutationRun(configuration: .init(harness: harness, lanes: ["a"]))([inA, inB])
+
+        #expect(harness.prepared == ["ATests", "BTests"])
+        #expect(harness.batched["ATests"] == [Batch.baseline, inA.switchName])
+        #expect(harness.batched["BTests"] == [Batch.baseline, inB.switchName])
+    }
+
+    @Test("gives a survivor to the next target that tests the same file, and keeps the kill")
+    func secondTargetKills() async throws {
+        let a = try TestSource(), b = try TestSource()
+        let shared = mutant(1, in: "/project/Shared.swift")
+        let harness = TargetStub(
+            targets: [
+                .init(name: "ATests", files: [a.url.path], aimedAt: ["/project/Shared.swift"]),
+                .init(name: "BTests", files: [b.url.path], aimedAt: ["/project/Shared.swift"]),
+            ],
+            kills: ["BTests": [shared.switchName]]
+        )
+
+        let summary = try await MutationRun(configuration: .init(harness: harness, lanes: ["a"]))([shared])
+
+        #expect(summary.killed == 1)
+        #expect(harness.batched["BTests"]?.contains(shared.switchName) == true)
+    }
+
+    @Test("does not run a caught mutant again in another target")
+    func caughtStaysCaught() async throws {
+        let a = try TestSource(), b = try TestSource()
+        let shared = mutant(1, in: "/project/Shared.swift")
+        let harness = TargetStub(
+            targets: [
+                .init(name: "ATests", files: [a.url.path], aimedAt: ["/project/Shared.swift"]),
+                .init(name: "BTests", files: [b.url.path], aimedAt: ["/project/Shared.swift"]),
+            ],
+            kills: ["ATests": [shared.switchName]]
+        )
+
+        let summary = try await MutationRun(configuration: .init(harness: harness, lanes: ["a"]))([shared])
+
+        #expect(summary.killed == 1)
+        #expect(harness.batched["BTests"] == nil)
+    }
+
+    @Test("passes over a target whose own suite fails, and runs the rest")
+    func redTargetSkipped() async throws {
+        let a = try TestSource(), b = try TestSource()
+        let inA = mutant(1, in: "/project/A.swift")
+        let inB = mutant(2, in: "/project/B.swift")
+        let harness = TargetStub(
+            targets: [
+                .init(name: "ATests", files: [a.url.path], aimedAt: ["/project/A.swift"]),
+                .init(name: "BTests", files: [b.url.path], aimedAt: ["/project/B.swift"]),
+            ],
+            kills: ["BTests": [inB.switchName]],
+            redBaselines: ["ATests"]
+        )
+
+        let summary = try await MutationRun(configuration: .init(harness: harness, lanes: ["a"]))([inA, inB])
+
+        #expect(summary.results.first { $0.mutant == inA }?.verdict == .error)
+        #expect(summary.results.first { $0.mutant == inB }?.verdict == .killed)
+    }
+
+    @Test("stops when the only target's suite fails")
+    func redOnlyTarget() async throws {
+        let a = try TestSource()
+        let harness = TargetStub(
+            targets: [.init(name: "ATests", files: [a.url.path], aimedAt: ["/project/A.swift"])],
+            redBaselines: ["ATests"]
+        )
+
+        await #expect(throws: MutationRun.Failure.self) {
+            try await MutationRun(configuration: .init(harness: harness, lanes: ["a"]))(
+                [self.mutant(1, in: "/project/A.swift")]
+            )
+        }
+    }
+
+    @Test("runs an XCTest target one process per mutant, narrowed to that target")
+    func xctestTargetIsolated() async throws {
+        let a = try TestSource("import XCTest\nfinal class T: XCTestCase {}\n")
+        let inA = mutant(1, in: "/project/A.swift")
+        let harness = TargetStub(targets: [
+            .init(name: "ATests", files: [a.url.path], aimedAt: ["/project/A.swift"]),
+        ])
+
+        _ = try await MutationRun(configuration: .init(harness: harness, lanes: ["a"]))([inA])
+
+        #expect(harness.prepared.isEmpty)
+        #expect(harness.separate["ATests"] == [inA.switchName])
+    }
+
+    @Test("ignores the driver's own XCTestCase when judging a target")
+    func driverIsNotXCTest() throws {
+        let source = try TestSource("import Testing\n" + Batch.driver)
+
+        let target = TestedScope.TestTarget(name: "ATests", files: [source.url.path])
+        #expect(TestedScope.batchIneligibility(of: target) == nil)
     }
 
     // MARK: - build repair
@@ -358,7 +508,8 @@ struct MutationRunTests {
         func coverage(lane: String) throws -> Coverage { Coverage(files: [:]) }
 
         func test(
-            _ built: BuiltTests, lane: String, switchOn mutantSwitch: String?, timeout: TimeInterval?
+            _ built: BuiltTests, lane: String, switchOn mutantSwitch: String?,
+            timeout: TimeInterval?, onlyTesting target: String?
         ) throws -> TestOutput {
             MutationRunTests.passing
         }

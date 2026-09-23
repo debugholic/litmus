@@ -40,10 +40,14 @@ struct Injection {
             print("  the whole tree")
         }
 
+        // Copied first, so the suite can run in the copy before any mutant is
+        // in it: the scheme that runs every test exists only there.
+        try ProjectInjection.clone(project, to: workingCopy)
+
         var coverage: Coverage?
         var tested: TestedScope?
         if scope.coverage {
-            let (testHarness, lanes) = try harness.resolved(for: project) {
+            let (testHarness, lanes) = try harness.resolved(for: workingCopy, writeScheme: true) {
                 print("  \($0)")
             }
 
@@ -53,7 +57,7 @@ struct Injection {
             heartbeat.begin()
             defer { heartbeat.end() }
 
-            let measured = try testHarness.coverage(lane: lanes[0])
+            let measured = try Self.measure(testHarness, lane: lanes[0], in: workingCopy, heartbeat: heartbeat)
             let took = heartbeat.end()
 
             guard !measured.isEmpty else {
@@ -79,7 +83,7 @@ struct Injection {
             coverage: coverage,
             changed: changed,
             scope: tested
-        )(project: project, workingCopy: workingCopy) { if verbose { print("    \($0)") } }
+        ).inject(project: project, workingCopy: workingCopy) { if verbose { print("    \($0)") } }
 
         guard !result.mutants.isEmpty else {
             var why: [String] = []
@@ -93,6 +97,41 @@ struct Injection {
         }
 
         return result
+    }
+
+    /// Runs the suite with coverage on.
+    ///
+    /// With Litmus's scheme of every test, a target that does not build or
+    /// whose own tests fail is taken out and the run tried again: one broken
+    /// target in seventy should not stop the other sixty-nine. Bounded,
+    /// because each try is a build and a run of everything left.
+    static func measure(
+        _ harness: any TestHarness,
+        lane: String,
+        in workingCopy: URL,
+        heartbeat: Heartbeat
+    ) throws -> Coverage {
+        let allTests = (harness as? Xcodebuild)?.scheme == AllTestsScheme.name
+
+        for _ in 0..<10 {
+            do {
+                return try harness.coverage(lane: lane)
+            } catch let failure as SuiteFailure where allTests {
+                let failedBundles = (harness as? Xcodebuild).map {
+                    TestedScope.failedTestTargets(inResultBundle: $0.coverageBundle)
+                } ?? []
+                let dropped = try AllTestsScheme.leaveOut(
+                    failedIn: failure.log, failedBundles: failedBundles, in: workingCopy
+                )
+                guard !dropped.isEmpty else { throw failure }
+
+                heartbeat.end()
+                print("  leaving out \(dropped.joined(separator: ", ")) — it does not build, or its own tests fail")
+                heartbeat.begin()
+            }
+        }
+
+        return try harness.coverage(lane: lane)
     }
 
     /// One line saying what was left out, so a small run never looks like a

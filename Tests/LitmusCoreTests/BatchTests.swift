@@ -82,13 +82,10 @@ struct BatchTests {
             scheme: "App",
             derivedDataPath: runner.directory.appendingPathComponent("dd")
         )
-        let plan = Batch.Plan(
-            built: BuiltTests(artifact: URL(fileURLWithPath: "/tmp/App.xctestrun")),
-            testTarget: "AppTests"
-        )
+        let plan = Batch.Plan(built: BuiltTests(artifact: URL(fileURLWithPath: "/tmp/App.xctestrun")))
 
         var collected: [Batch.Event] = []
-        let verdicts = try xcodebuild.runBatch(plan, lane: "id=X", ids: ids, timeouts: quick) {
+        let verdicts = try xcodebuild.runBatch(plan, target: "AppTests", lane: "id=X", ids: ids, timeouts: quick) {
             collected.append($0)
         }
         events = collected

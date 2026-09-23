@@ -12,15 +12,16 @@ public struct MutationRun: Sendable {
         /// allow it. Off means a fresh process for every mutant.
         public let batching: Bool
         /// Takes the mutants a failed build names out of the source and
-        /// returns them, or none when it cannot tell which. Without it, a
-        /// build that fails ends the run.
-        public let repair: (@Sendable (_ log: String, _ mutants: [Mutant]) throws -> [Mutant])?
+        /// returns them — none when it fixed something else, such as a test
+        /// target that never built — or nil when it cannot tell what broke.
+        /// Without it, a build that fails ends the run.
+        public let repair: (@Sendable (_ log: String, _ mutants: [Mutant]) throws -> [Mutant]?)?
 
         public init(
             harness: any TestHarness,
             lanes: [String],
             batching: Bool = true,
-            repair: (@Sendable (_ log: String, _ mutants: [Mutant]) throws -> [Mutant])? = nil
+            repair: (@Sendable (_ log: String, _ mutants: [Mutant]) throws -> [Mutant]?)? = nil
         ) {
             self.harness = harness
             self.lanes = lanes
@@ -126,10 +127,18 @@ public struct MutationRun: Sendable {
         /// The build said which modules the tests are aimed at, and mutants
         /// outside them were left out.
         case scoped(modules: [String], kept: Int, dropped: Int)
-        /// Adding the in-process driver and rebuilding the tests.
-        case preparingBatch
-        /// Each mutant gets a process of its own, and why.
+        /// Adding the in-process driver to these test targets and rebuilding.
+        case preparingBatch(targets: Int)
+        /// Each mutant gets a process of its own running the whole suite,
+        /// and why.
         case oneProcessPerMutant(String)
+        /// Running a test target against the mutants in the code it tests.
+        /// `isolated` says why each mutant gets a process of its own, or is
+        /// nil when they share one.
+        case target(String, mutants: Int, isolated: String?)
+        /// A test target was passed over, and why; its mutants are left to the
+        /// other targets that test the same code.
+        case targetSkipped(String, reason: String)
         case checkingBaseline
         case baselinePassed(TimeInterval)
         /// The batch is done; these mutants sit in values Swift computes once,
@@ -173,48 +182,15 @@ public struct MutationRun: Sendable {
             return Summary(results: rejected, duration: Date().timeIntervalSince(started))
         }
 
-        if configuration.batching, let batching = harness as? any BatchingHarness {
-            if let scope, scope.batchIneligibility == nil {
-                progress(.preparingBatch)
-                if let plan = try batching.prepareBatch(built, scope: scope, lane: configuration.lanes[0]) {
-                    let summary = try await runBatched(plan, mutants, using: batching, started: started)
-                    return Summary(results: rejected + summary.results, duration: summary.duration)
-                }
-            } else {
-                progress(.oneProcessPerMutant(
-                    scope?.batchIneligibility ?? "could not tell which tests the build runs"
-                ))
+        let results: [MutantResult]
+        if let scope, !scope.testTargets.isEmpty {
+            results = try await runByTarget(mutants, scope: scope, built: built)
+        } else {
+            if harness is any BatchingHarness {
+                progress(.oneProcessPerMutant("could not tell which tests the build runs"))
             }
+            results = try await runWholeSuite(mutants, built: built)
         }
-
-        // Every mutant is compiled in but switched off here, so this is the
-        // project's own suite. Measuring against a red baseline would report
-        // mutants as killed by failures that were already there.
-        progress(.checkingBaseline)
-        let baselineStarted = Date()
-
-        var timeouts = Batch.Timeouts()
-        let baseline = try harness.test(
-            built,
-            lane: configuration.lanes[0],
-            switchOn: nil,
-            timeout: timeouts.baseline
-        )
-        let baselineVerdict = TestSuiteOutcome(baseline).verdict
-        guard baselineVerdict == .survived else {
-            throw Failure.baselineNotGreen(baselineVerdict)
-        }
-
-        let baselineDuration = Date().timeIntervalSince(baselineStarted)
-        progress(.baselinePassed(baselineDuration))
-
-        // Measured on a whole launch, like every run after it, so ten times
-        // this leaves a slow mutant room and still stops an infinite loop.
-        timeouts.learn(baseline: baselineDuration)
-
-        let results = try await runEach(
-            mutants, built: built, timeout: timeouts.mutant, tally: Tally(total: mutants.count)
-        )
 
         return Summary(results: rejected + results, duration: Date().timeIntervalSince(started))
     }
@@ -233,8 +209,8 @@ public struct MutationRun: Sendable {
             } catch let failure as BuildFailure {
                 guard let repair = configuration.repair else { throw failure }
 
-                let pulled = try repair(failure.log, mutants)
-                guard !pulled.isEmpty else { throw failure }
+                guard let pulled = try repair(failure.log, mutants) else { throw failure }
+                guard !pulled.isEmpty else { continue }
 
                 let ids = Set(pulled.map(\.switchName))
                 mutants.removeAll { ids.contains($0.switchName) }
@@ -246,14 +222,154 @@ public struct MutationRun: Sendable {
         return (try configuration.harness.build(lane: configuration.lanes[0]), unviable)
     }
 
-    /// Every lane runs its share of the mutants in one process. The first
-    /// lane opens with the baseline, and a red one fails the whole run.
+    // MARK: - the whole suite
+
+    /// Every mutant against every test, a fresh process each. For when the
+    /// build does not say which tests are aimed where.
+    private func runWholeSuite(_ mutants: [Mutant], built: BuiltTests) async throws -> [MutantResult] {
+        let timeouts = try checkBaseline(built: built, onlyTesting: nil)
+        return try await runEach(
+            mutants, built: built, onlyTesting: nil,
+            timeout: timeouts.mutant, tally: Tally(total: mutants.count)
+        )
+    }
+
+    /// Runs the suite with nothing switched on, and learns from it how long a
+    /// mutant may take.
+    ///
+    /// Every mutant is compiled in but switched off here, so this is the
+    /// project's own suite. Measuring against a red baseline would report
+    /// mutants as killed by failures that were already there.
+    private func checkBaseline(built: BuiltTests, onlyTesting target: String?) throws -> Batch.Timeouts {
+        progress(.checkingBaseline)
+        let started = Date()
+        var timeouts = Batch.Timeouts()
+
+        let baseline = try configuration.harness.test(
+            built,
+            lane: configuration.lanes[0],
+            switchOn: nil,
+            timeout: timeouts.baseline,
+            onlyTesting: target
+        )
+        let verdict = TestSuiteOutcome(baseline).verdict
+        guard verdict == .survived else {
+            throw Failure.baselineNotGreen(verdict)
+        }
+
+        let duration = Date().timeIntervalSince(started)
+        progress(.baselinePassed(duration))
+
+        // Measured on a whole launch, like every run after it, so ten times
+        // this leaves a slow mutant room and still stops an infinite loop.
+        timeouts.learn(baseline: duration)
+        return timeouts
+    }
+
+    // MARK: - target by target
+
+    /// Each test target runs against the mutants in the code it is aimed at.
+    ///
+    /// A mutant in code several targets test goes to the next one only if
+    /// the last did not catch it, and keeps the best verdict it earned. A
+    /// target whose own suite fails is passed over rather than ending the
+    /// run, unless it is the only one.
+    private func runByTarget(
+        _ mutants: [Mutant],
+        scope: TestedScope,
+        built: BuiltTests
+    ) async throws -> [MutantResult] {
+        let batching = configuration.batching ? configuration.harness as? any BatchingHarness : nil
+        let targets = scope.testTargets.filter { target in
+            mutants.contains { target.aims(at: $0.filePath) }
+        }
+
+        let batchable = batching == nil
+            ? []
+            : targets.filter { TestedScope.batchIneligibility(of: $0) == nil }
+
+        var plan: Batch.Plan?
+        if let batching, !batchable.isEmpty {
+            progress(.preparingBatch(targets: batchable.count))
+            plan = try batching.prepareBatch(built, targets: batchable, lane: configuration.lanes[0])
+        }
+        let runnable = plan?.built ?? built
+
+        var best: [String: MutantResult] = [:]
+        func caught(_ mutant: Mutant) -> Bool {
+            guard let verdict = best[mutant.switchName]?.verdict else { return false }
+            return verdict == .killed || verdict == .timedOut
+        }
+
+        for target in targets {
+            let share = mutants.filter { target.aims(at: $0.filePath) && !caught($0) }
+            guard !share.isEmpty else { continue }
+
+            let inBatch = plan != nil && batchable.contains(target)
+            let reason = inBatch
+                ? nil
+                : (batching == nil ? "asked for" : TestedScope.batchIneligibility(of: target))
+            progress(.target(target.name, mutants: share.count, isolated: reason))
+
+            let outcome: [MutantResult]
+            do {
+                if let plan, let batching, inBatch {
+                    outcome = try await runBatched(plan, target: target.name, share, using: batching)
+                } else {
+                    outcome = try await runIsolated(share, target: target.name, built: runnable)
+                }
+            } catch let failure as Failure where targets.count > 1 {
+                progress(.targetSkipped(target.name, reason: failure.description))
+                continue
+            }
+
+            for result in outcome {
+                if Self.improves(result, on: best[result.mutant.switchName]) {
+                    best[result.mutant.switchName] = result
+                }
+            }
+        }
+
+        // A mutant no target could run — every one that tests it was passed
+        // over — has no verdict, and is not scored.
+        return mutants.map { best[$0.switchName] ?? MutantResult(mutant: $0, verdict: .error, duration: 0) }
+    }
+
+    /// Caught beats survived beats could-not-run.
+    static func improves(_ new: MutantResult, on old: MutantResult?) -> Bool {
+        func rank(_ verdict: Verdict) -> Int {
+            switch verdict {
+            case .killed, .timedOut: return 2
+            case .survived: return 1
+            case .unviable, .error: return 0
+            }
+        }
+        guard let old else { return true }
+        return rank(new.verdict) > rank(old.verdict)
+    }
+
+    /// One target, a fresh process per mutant.
+    private func runIsolated(
+        _ mutants: [Mutant],
+        target: String,
+        built: BuiltTests
+    ) async throws -> [MutantResult] {
+        let timeouts = try checkBaseline(built: built, onlyTesting: target)
+        return try await runEach(
+            mutants, built: built, onlyTesting: target,
+            timeout: timeouts.mutant, tally: Tally(total: mutants.count)
+        )
+    }
+
+    /// One target, every lane running its share of the mutants in one
+    /// process. The first lane opens with the baseline, and a red one fails
+    /// the target.
     private func runBatched(
         _ plan: Batch.Plan,
+        target: String,
         _ mutants: [Mutant],
-        using harness: any BatchingHarness,
-        started: Date
-    ) async throws -> Summary {
+        using harness: any BatchingHarness
+    ) async throws -> [MutantResult] {
         let lanes = configuration.lanes
         let byID = Dictionary(uniqueKeysWithValues: mutants.map { ($0.switchName, $0) })
         let tally = Tally(total: mutants.count)
@@ -282,7 +398,7 @@ public struct MutationRun: Sendable {
                 group.addTask {
                     var durations: [String: TimeInterval] = [:]
                     let verdicts = try harness.runBatch(
-                        plan, lane: lane, ids: ids, timeouts: Batch.Timeouts()
+                        plan, target: target, lane: lane, ids: ids, timeouts: Batch.Timeouts()
                     ) { event in
                         switch event {
                         case .started(Batch.baseline):
@@ -325,19 +441,22 @@ public struct MutationRun: Sendable {
         }
 
         if !alone.isEmpty { progress(.evaluatedOnce(alone.count)) }
+
         // The batch's baseline ran inside a process that was already up, so it
         // says nothing about how long a launch takes; the default allows one.
         let separate = try await runEach(
-            alone, built: plan.built, timeout: Batch.Timeouts().mutant, tally: tally
+            alone, built: plan.built, onlyTesting: target,
+            timeout: Batch.Timeouts().mutant, tally: tally
         )
 
-        return Summary(results: results + separate, duration: Date().timeIntervalSince(started))
+        return results + separate
     }
 
     /// One fresh process per mutant, one in flight per lane.
     private func runEach(
         _ mutants: [Mutant],
         built: BuiltTests,
+        onlyTesting target: String?,
         timeout: TimeInterval,
         tally: Tally
     ) async throws -> [MutantResult] {
@@ -352,14 +471,28 @@ public struct MutationRun: Sendable {
             var pending = mutants[...]
             var collected: [MutantResult] = []
 
+            func start(_ mutant: Mutant, on lane: String) {
+                progress(.started(mutant))
+                group.addTask {
+                    let started = Date()
+                    let output = try harness.test(
+                        built, lane: lane, switchOn: mutant.switchName,
+                        timeout: timeout, onlyTesting: target
+                    )
+                    let result = MutantResult(
+                        mutant: mutant,
+                        verdict: TestSuiteOutcome(output).verdict,
+                        duration: Date().timeIntervalSince(started)
+                    )
+                    return (result, lane)
+                }
+            }
+
             // One in flight per lane. Each worker owns its lane, and they only
             // read what the build produced, so nothing serialises them.
             for lane in configuration.lanes {
                 guard let mutant = pending.popFirst() else { break }
-                progress(.started(mutant))
-                group.addTask {
-                    (try run(mutant, in: lane, built: built, timeout: timeout, using: harness), lane)
-                }
+                start(mutant, on: lane)
             }
 
             while let finished = try await group.next() {
@@ -367,33 +500,12 @@ public struct MutationRun: Sendable {
                 progress(.finished(finished.result, done: tally.next(), of: tally.total))
 
                 if let mutant = pending.popFirst() {
-                    let lane = finished.lane
-                    progress(.started(mutant))
-                    group.addTask {
-                        (try run(mutant, in: lane, built: built, timeout: timeout, using: harness), lane)
-                    }
+                    start(mutant, on: finished.lane)
                 }
             }
 
             return collected
         }
-    }
-
-    private func run(
-        _ mutant: Mutant,
-        in lane: String,
-        built: BuiltTests,
-        timeout: TimeInterval,
-        using harness: any TestHarness
-    ) throws -> MutantResult {
-        let started = Date()
-        let log = try harness.test(built, lane: lane, switchOn: mutant.switchName, timeout: timeout)
-
-        return MutantResult(
-            mutant: mutant,
-            verdict: TestSuiteOutcome(log).verdict,
-            duration: Date().timeIntervalSince(started)
-        )
     }
 }
 

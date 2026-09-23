@@ -1,17 +1,22 @@
 import Foundation
 
 extension Xcodebuild: BatchingHarness {
-    public func prepareBatch(_ built: BuiltTests, scope: TestedScope, lane: String) throws -> Batch.Plan? {
-        guard let target = scope.batchTarget else { return nil }
+    public func prepareBatch(
+        _ built: BuiltTests,
+        targets: [TestedScope.TestTarget],
+        lane: String
+    ) throws -> Batch.Plan {
+        for target in targets {
+            try Batch.appendDriver(to: target)
+        }
 
-        try Batch.appendDriver(to: target)
-
-        // Incremental: only the test target changed.
-        return Batch.Plan(built: try build(lane: lane), testTarget: target.name)
+        // Incremental: only the test targets changed.
+        return Batch.Plan(built: try build(lane: lane))
     }
 
     public func runBatch(
         _ plan: Batch.Plan,
+        target: String,
         lane: String,
         ids: [String],
         timeouts: Batch.Timeouts,
@@ -27,7 +32,7 @@ extension Xcodebuild: BatchingHarness {
 
         while !remaining.isEmpty {
             let outcome = try launch(
-                plan, xctestrun: xctestrun, lane: lane, ids: remaining,
+                target: target, xctestrun: xctestrun, lane: lane, ids: remaining,
                 timeouts: &timeouts, onEvent: onEvent
             )
             verdicts.merge(outcome.verdicts) { _, new in new }
@@ -64,7 +69,7 @@ extension Xcodebuild: BatchingHarness {
     }
 
     private func launch(
-        _ plan: Batch.Plan,
+        target: String,
         xctestrun: URL,
         lane: String,
         ids: [String],
@@ -93,7 +98,7 @@ extension Xcodebuild: BatchingHarness {
             "-destination", lane,
             "-derivedDataPath", laneData.path,
             "-resultBundlePath", scratch.appendingPathComponent("result.xcresult").path,
-            "-only-testing:\(plan.testTarget)/\(Batch.driverClass)/\(Batch.driverTest)",
+            "-only-testing:\(target)/\(Batch.driverClass)/\(Batch.driverTest)",
         ]
         process.environment = ProcessInfo.processInfo.environment.merging([
             "TEST_RUNNER_\(Batch.batchFileVariable)": batchFile.path,

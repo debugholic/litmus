@@ -15,7 +15,7 @@ public struct Xcodebuild: Sendable, TestHarness {
 
     let executable: String
     let workingDirectory: URL
-    let scheme: String
+    public let scheme: String
     let derivedDataPath: URL
 
     public init(
@@ -44,7 +44,8 @@ public struct Xcodebuild: Sendable, TestHarness {
         _ built: BuiltTests,
         lane: String,
         switchOn mutantSwitch: String?,
-        timeout: TimeInterval?
+        timeout: TimeInterval?,
+        onlyTesting target: String?
     ) throws -> TestOutput {
         guard let xctestrun = built.artifact else {
             throw Failure(description: "no .xctestrun to run")
@@ -54,6 +55,7 @@ public struct Xcodebuild: Sendable, TestHarness {
             xctestrun: xctestrun,
             destination: lane,
             switchOn: mutantSwitch,
+            onlyTesting: target.map { [$0] } ?? [],
             timeout: timeout
         )
     }
@@ -169,7 +171,7 @@ public struct Xcodebuild: Sendable, TestHarness {
         ])
 
         guard status == 0 else {
-            throw Failure(description: Self.suiteFailure(in: log))
+            throw SuiteFailure(log: log)
         }
 
         let (report, reportStatus) = try run(
@@ -188,7 +190,7 @@ public struct Xcodebuild: Sendable, TestHarness {
         TestedScope.from(resultBundle: coverageBundle, derivedData: derivedDataPath)
     }
 
-    var coverageBundle: URL {
+    public var coverageBundle: URL {
         derivedDataPath.appendingPathComponent("litmus-coverage.xcresult")
     }
 

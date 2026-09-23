@@ -20,7 +20,7 @@ struct HarnessOptions: ParsableArguments {
     @Option(help: "How to run the tests. Worked out from the project by default.")
     var harness: HarnessKind?
 
-    @Option(help: "Scheme to build. Used when the project has more than one.")
+    @Option(help: "Run only this scheme's tests, instead of every unit test in the project.")
     var scheme: String?
 
     @Option(help: "How many mutants to run at once.")
@@ -39,7 +39,16 @@ struct HarnessOptions: ParsableArguments {
     ///
     /// A simulator is a real lane — a mutant runs on one at a time. A Swift
     /// package has no such thing, so a lane there is just a slot.
-    func resolved(for project: URL, say: (String) -> Void = { _ in }) throws -> (
+    ///
+    /// Without `--scheme`, an Xcode project runs every unit test it has,
+    /// through a scheme Litmus writes for the purpose. `writeScheme` says
+    /// `project` is Litmus's own copy and the scheme may be written into it;
+    /// otherwise one already there is used, and nothing is written.
+    func resolved(
+        for project: URL,
+        writeScheme: Bool = false,
+        say: (String) -> Void = { _ in }
+    ) throws -> (
         harness: any TestHarness,
         lanes: [String]
     ) {
@@ -50,6 +59,10 @@ struct HarnessOptions: ParsableArguments {
         switch harness ?? Discovery.harness(in: project) {
         case .xcode:
             let scheme = try scheme ?? {
+                if let all = try Discovery.allTestsScheme(in: project, write: writeScheme) {
+                    say("every unit test in the project, through a scheme of litmus's own")
+                    return all
+                }
                 let found = try Discovery.scheme(in: project)
                 say("scheme \(found)")
                 return found

@@ -90,20 +90,25 @@ struct Run: AsyncParsableCommand {
 
         // Quiet here: whatever it had to work out was already said and printed
         // while the mutants were being written.
-        let (testHarness, lanes) = try harness.resolved(for: working)
+        // Litmus's own copy may take its scheme; a copy handed in with
+        // --plan keeps whatever it has.
+        let (testHarness, lanes) = try harness.resolved(for: working, writeScheme: plan == nil)
 
         print("\n\(check.injected.count) mutants, \(lanes.count) at a time\n")
 
         // A plan brings its own copy, with no original beside it to rewrite
         // a rejected file from.
         let repair = plan == nil ? BuildRepair(project: project, workingCopy: working) : nil
+        let allTests = (testHarness as? Xcodebuild)?.scheme == AllTestsScheme.name
 
         let summary = try await MutationRun(
             configuration: .init(
                 harness: testHarness,
                 lanes: lanes,
                 batching: !isolate,
-                repair: repair.map { repair in { try repair(log: $0, mutants: $1) } }
+                repair: repair.map { repair in
+                    Self.repairing(with: repair, allTests: allTests, in: working)
+                }
             ),
             progress: { Self.show($0) }
         )(check.injected)
@@ -149,6 +154,27 @@ struct Run: AsyncParsableCommand {
         return (workingCopy, result.mutants)
     }
 
+    /// Takes out what a failed build names: the mutants the compiler
+    /// rejected, or failing that, with Litmus's scheme of every test, a test
+    /// target that does not build on its own.
+    private static func repairing(
+        with repair: BuildRepair,
+        allTests: Bool,
+        in working: URL
+    ) -> @Sendable (String, [Mutant]) throws -> [Mutant]? {
+        { log, mutants in
+            let pulled = try repair(log: log, mutants: mutants)
+            if !pulled.isEmpty { return pulled }
+
+            guard allTests else { return nil }
+            let dropped = try AllTestsScheme.leaveOut(failedIn: log, in: working)
+            guard !dropped.isEmpty else { return nil }
+
+            print("  leaving out \(dropped.joined(separator: ", ")) — it does not build".yellow)
+            return []
+        }
+    }
+
     /// Says what is happening while it happens.
     ///
     /// A build is minutes and a single mutant can be more than that, all of it
@@ -185,9 +211,19 @@ struct Run: AsyncParsableCommand {
                 print("  nothing left to run: none of the mutants are in code these tests are aimed at")
             }
 
-        case .preparingBatch:
-            print("  adding the in-process driver and rebuilding the tests…")
+        case let .preparingBatch(targets):
+            heartbeat.end()
+            print("  adding the in-process driver to \(targets) test target(s) and rebuilding…")
             heartbeat.begin()
+
+        case let .target(name, mutants, isolated):
+            heartbeat.end()
+            let how = isolated.map { "one process each — \($0)" } ?? "in one process"
+            print("\n  \(name): \(mutants) mutant(s), \(how)")
+
+        case let .targetSkipped(name, reason):
+            heartbeat.end()
+            print("  skipping \(name): \(reason)".yellow)
 
         case let .oneProcessPerMutant(reason):
             heartbeat.end()

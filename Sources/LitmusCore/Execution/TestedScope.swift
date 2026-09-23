@@ -15,7 +15,21 @@ public struct TestedScope: Sendable, Equatable {
     /// A test target and the files it was compiled from.
     public struct TestTarget: Sendable, Equatable {
         public let name: String
+        /// The test target's own sources.
         public let files: [String]
+        /// The sources of the modules it tests: the one it is named after and
+        /// the ones it imports with `@testable`.
+        let aimedAt: Set<String>
+
+        public init(name: String, files: [String], aimedAt: Set<String> = []) {
+            self.name = name
+            self.files = files
+            self.aimedAt = Set(aimedAt.map(TestedScope.normalise))
+        }
+
+        public func aims(at path: String) -> Bool {
+            aimedAt.contains(TestedScope.normalise(path))
+        }
     }
 
     public let modules: [String]
@@ -70,22 +84,32 @@ extension TestedScope {
             under: derivedData.appendingPathComponent("Build/Intermediates.noindex")
         )
 
+        func sources(ofModule module: String) -> [String] {
+            (fileLists[module] ?? []).flatMap { self.files(inSwiftFileList: $0) }
+        }
+
         var modules: [String] = []
         var targets: [TestTarget] = []
         for target in testTargets {
-            modules.append(moduleName(forTestTarget: target))
+            let sources = sources(ofModule: target)
 
-            let sources = (fileLists[target] ?? []).flatMap { self.files(inSwiftFileList: $0) }
-            targets.append(TestTarget(name: target, files: sources.sorted()))
-
+            var aimedAt = [moduleName(forTestTarget: target)]
             for source in sources {
                 guard let text = try? String(contentsOfFile: source, encoding: .utf8) else { continue }
-                modules.append(contentsOf: testableImports(in: text))
+                aimedAt.append(contentsOf: testableImports(in: text))
             }
+            aimedAt = aimedAt.filter { fileLists[$0] != nil }
+
+            modules.append(contentsOf: aimedAt)
+            targets.append(TestTarget(
+                name: target,
+                files: sources.sorted(),
+                aimedAt: Set(aimedAt.flatMap(sources(ofModule:)))
+            ))
         }
 
         var seen: Set<String> = []
-        modules = modules.filter { fileLists[$0] != nil && seen.insert($0).inserted }
+        modules = modules.filter { seen.insert($0).inserted }
 
         let files = modules
             .flatMap { fileLists[$0] ?? [] }
@@ -95,34 +119,26 @@ extension TestedScope {
         return TestedScope(modules: modules, files: Set(files), testTargets: targets)
     }
 
-    /// The test target a single process can run every test of, if there is one.
-    public var batchTarget: TestTarget? {
-        batchIneligibility == nil ? testTargets.first : nil
-    }
-
-    /// Why these tests cannot all run in one process, or nil when they can.
+    /// Why a test target's tests cannot all run in one process, or nil
+    /// when they can.
     ///
     /// The driver reruns Swift Testing inside the process; it cannot rerun
-    /// XCTest cases, and it cannot reach a second bundle, which xcodebuild
-    /// runs in a process of its own. Either way some tests would never run
-    /// with the mutant on, and a mutant only they would kill would be
-    /// reported as a survivor.
-    public var batchIneligibility: String? {
-        guard testTargets.count == 1, let target = testTargets.first, !target.files.isEmpty else {
-            return testTargets.count > 1
-                ? "the scheme runs \(testTargets.count) test bundles"
-                : "could not find the test sources"
-        }
+    /// XCTest cases. Some tests would never run with the mutant on, and a
+    /// mutant only they would kill would be reported as a survivor.
+    static func batchIneligibility(of target: TestTarget) -> String? {
+        guard !target.files.isEmpty else { return "could not find the sources of \(target.name)" }
 
         var swiftTesting = false
         for file in target.files {
             guard let text = try? String(contentsOfFile: file, encoding: .utf8) else {
                 return "could not read \(URL(fileURLWithPath: file).lastPathComponent)"
             }
-            if Self.declaresXCTestCase(in: text) {
+            // The driver litmus adds is an XCTestCase of its own.
+            let own = text.components(separatedBy: Batch.driverMarker).first ?? text
+            if Self.declaresXCTestCase(in: own) {
                 return "\(target.name) has XCTest cases, which only a fresh process reruns"
             }
-            if text.contains("import Testing") { swiftTesting = true }
+            if own.contains("import Testing") { swiftTesting = true }
         }
 
         return swiftTesting ? nil : "\(target.name) has no Swift Testing tests"
@@ -150,7 +166,7 @@ extension TestedScope {
     }
 
     /// The test bundles a result bundle says ran.
-    static func testTargetNames(inResultBundle bundle: URL) -> [String] {
+    static func testTargetNames(inResultBundle bundle: URL, failedOnly: Bool = false) -> [String] {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
         process.arguments = ["xcresulttool", "get", "test-results", "tests", "--path", bundle.path]
@@ -162,10 +178,18 @@ extension TestedScope {
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
 
-        return testTargetNames(inTestResults: data)
+        return testTargetNames(inTestResults: data, failedOnly: failedOnly)
     }
 
-    static func testTargetNames(inTestResults data: Data) -> [String] {
+    /// The test bundles a result bundle says failed.
+    ///
+    /// The log's `Failing tests:` list names Swift Testing suites, not the
+    /// bundles they are in; the result bundle knows which bundle each is in.
+    public static func failedTestTargets(inResultBundle bundle: URL) -> [String] {
+        testTargetNames(inResultBundle: bundle, failedOnly: true)
+    }
+
+    static func testTargetNames(inTestResults data: Data, failedOnly: Bool = false) -> [String] {
         guard
             let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let nodes = root["testNodes"] as? [[String: Any]]
@@ -174,7 +198,8 @@ extension TestedScope {
         var names: [String] = []
         func walk(_ node: [String: Any]) {
             if let type = node["nodeType"] as? String, type.hasSuffix("test bundle"),
-               let name = node["name"] as? String {
+               let name = node["name"] as? String,
+               !failedOnly || node["result"] as? String == "Failed" {
                 names.append(name)
             }
             for child in node["children"] as? [[String: Any]] ?? [] { walk(child) }
@@ -201,7 +226,9 @@ extension TestedScope {
         return TestedScope(
             modules: modules,
             files: Set(files.map(move)),
-            testTargets: testTargets.map { TestTarget(name: $0.name, files: $0.files.map(move)) }
+            testTargets: testTargets.map {
+                TestTarget(name: $0.name, files: $0.files.map(move), aimedAt: Set($0.aimedAt.map(move)))
+            }
         )
     }
 

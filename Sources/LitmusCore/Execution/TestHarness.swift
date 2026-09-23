@@ -49,6 +49,15 @@ public struct BuildFailure: Error, CustomStringConvertible {
     }
 }
 
+/// A coverage run whose suite did not pass or did not build, with the log.
+public struct SuiteFailure: Error, CustomStringConvertible {
+    public let log: String
+
+    public init(log: String) { self.log = log }
+
+    public var description: String { Xcodebuild.suiteFailure(in: log) }
+}
+
 /// A way of building and running a project's tests.
 ///
 /// The split matters more than it looks. Every mutant is compiled into the
@@ -63,12 +72,14 @@ public protocol TestHarness: Sendable {
     func build(lane: String) throws -> BuiltTests
 
     /// Runs the built tests, with at most one mutant switched on, stopping
-    /// them after `timeout` seconds when one is given.
+    /// them after `timeout` seconds when one is given. `onlyTesting` names
+    /// the one test target to run, where the harness can narrow to one.
     func test(
         _ built: BuiltTests,
         lane: String,
         switchOn mutantSwitch: String?,
-        timeout: TimeInterval?
+        timeout: TimeInterval?,
+        onlyTesting target: String?
     ) throws -> TestOutput
 
     /// Runs the suite once with coverage on, and reports what it reached.
@@ -89,7 +100,7 @@ public protocol TestHarness: Sendable {
 
 extension TestHarness {
     public func test(_ built: BuiltTests, lane: String, switchOn mutantSwitch: String?) throws -> TestOutput {
-        try test(built, lane: lane, switchOn: mutantSwitch, timeout: nil)
+        try test(built, lane: lane, switchOn: mutantSwitch, timeout: nil, onlyTesting: nil)
     }
 
     public func testedScope(_ built: BuiltTests) -> TestedScope? { nil }
@@ -98,14 +109,14 @@ extension TestHarness {
 
 /// A harness that can run many mutants in one test process.
 public protocol BatchingHarness: TestHarness {
-    /// Adds the driver to the tests and rebuilds them, or nil when these
-    /// tests cannot be run that way.
-    func prepareBatch(_ built: BuiltTests, scope: TestedScope, lane: String) throws -> Batch.Plan?
+    /// Adds the driver to these test targets and rebuilds the tests once.
+    func prepareBatch(_ built: BuiltTests, targets: [TestedScope.TestTarget], lane: String) throws -> Batch.Plan
 
-    /// Runs the batch to the end, relaunching past any mutant that takes the
-    /// process down, and returns a verdict for every id.
+    /// Runs the batch in one test target to the end, relaunching past any
+    /// mutant that takes the process down, and returns a verdict for every id.
     func runBatch(
         _ plan: Batch.Plan,
+        target: String,
         lane: String,
         ids: [String],
         timeouts: Batch.Timeouts,

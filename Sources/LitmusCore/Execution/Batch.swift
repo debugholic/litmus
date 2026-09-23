@@ -12,8 +12,8 @@ public enum Batch {
     /// What a batch run needs: the rebuilt tests, and the target the driver
     /// was added to.
     public struct Plan: Sendable {
+        /// Rebuilt, with the driver in every target that has one.
         public let built: BuiltTests
-        public let testTarget: String
     }
 
     /// Something the driver reported.
@@ -51,6 +51,8 @@ public enum Batch {
     static let resultsFileVariable = "LITMUS_RESULTS_FILE"
     static let driverClass = "__LitmusDriver"
     static let driverTest = "test__litmus"
+    /// The first line of the driver, so the tests' own code can be told apart.
+    static let driverMarker = "// ─── Added by litmus to its working copy."
 
     /// The test that runs the batch, appended to a file of the test target.
     ///

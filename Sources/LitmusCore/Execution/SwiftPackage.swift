@@ -40,7 +40,8 @@ public struct SwiftPackage: Sendable, TestHarness {
         _ built: BuiltTests,
         lane: String,
         switchOn mutantSwitch: String?,
-        timeout: TimeInterval?
+        timeout: TimeInterval?,
+        onlyTesting target: String?
     ) throws -> TestOutput {
         var environment: [String: String] = [:]
 

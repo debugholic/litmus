@@ -1,4 +1,5 @@
 import Foundation
+import LitmusCore
 
 /// Works out what the caller would otherwise have to type.
 ///
@@ -40,6 +41,16 @@ enum Discovery {
     }
 
     // MARK: - scheme
+
+    /// Litmus's scheme of every unit test, written into `project` when
+    /// `write` allows it, or found there from an earlier write.
+    static func allTestsScheme(in project: URL, write: Bool) throws -> String? {
+        if write { return try AllTestsScheme.prepare(in: project) }
+
+        guard let location = AllTestsScheme.schemeLocation(in: project) else { return nil }
+        let file = location.directory.appendingPathComponent("\(AllTestsScheme.name).xcscheme")
+        return FileManager.default.fileExists(atPath: file.path) ? AllTestsScheme.name : nil
+    }
 
     /// The one scheme, when there is one.
     ///

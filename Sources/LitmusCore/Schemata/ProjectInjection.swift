@@ -79,7 +79,20 @@ public struct ProjectInjection: Sendable {
         workingCopy: URL,
         progress: (String) -> Void = { _ in }
     ) throws -> Result {
-        try copy(project, to: workingCopy)
+        try Self.clone(project, to: workingCopy)
+        return try inject(project: project, workingCopy: workingCopy, progress: progress)
+    }
+
+    /// Writes the mutants into a working copy `clone` already made.
+    ///
+    /// Apart from the copy so something can run in it first: coverage is
+    /// measured in the copy, before a single mutant is in it, when a scheme
+    /// that only the copy has is the one that runs every test.
+    public func inject(
+        project: URL,
+        workingCopy: URL,
+        progress: (String) -> Void = { _ in }
+    ) throws -> Result {
 
         var mutants: [Mutant] = []
         var untouched = 0
@@ -151,12 +164,12 @@ public struct ProjectInjection: Sendable {
     /// driver appended to a test file in the copy landed in the user's
     /// project. `copyItem` clones on APFS: bytes are shared until one side is
     /// written, then split. Across volumes it copies instead.
-    private func copy(_ project: URL, to destination: URL) throws {
+    public static func clone(_ project: URL, to destination: URL) throws {
         try? FileManager.default.removeItem(at: destination)
         try clone(project, to: destination, depth: 0)
     }
 
-    private func clone(_ source: URL, to destination: URL, depth: Int) throws {
+    private static func clone(_ source: URL, to destination: URL, depth: Int) throws {
         let manager = FileManager.default
         try manager.createDirectory(at: destination, withIntermediateDirectories: true)
 

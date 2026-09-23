@@ -95,6 +95,47 @@ struct TestedScopeTests {
         #expect(!scope.contains(build.path("Other/B.swift")))
     }
 
+    @Test("says which files each test target is aimed at")
+    func perTarget() throws {
+        let build = try FakeBuild()
+        try build.target("DomainSettings", files: ["Domain/A.swift": ""])
+        try build.target("FeatureSetting", files: ["Feature/B.swift": ""])
+        try build.target("DomainSettingsTests", files: ["Domain/Tests/T.swift": "import Testing\n"])
+        try build.target("FeatureSettingTests", files: [
+            "Feature/Tests/T.swift": "@testable import DomainSettings\n",
+        ])
+
+        let scope = try #require(TestedScope.from(
+            xctestrun: try build.xctestrun([
+                "DomainSettingsTests": ["TestHostPath": "x"],
+                "FeatureSettingTests": ["TestHostPath": "x"],
+            ]),
+            derivedData: build.derivedData
+        ))
+
+        let domain = try #require(scope.testTargets.first { $0.name == "DomainSettingsTests" })
+        let feature = try #require(scope.testTargets.first { $0.name == "FeatureSettingTests" })
+
+        #expect(domain.aims(at: build.path("Domain/A.swift")))
+        #expect(!domain.aims(at: build.path("Feature/B.swift")))
+        #expect(feature.aims(at: build.path("Feature/B.swift")))
+        #expect(feature.aims(at: build.path("Domain/A.swift")))
+    }
+
+    @Test("picks the failed bundles out of a result bundle")
+    func failedBundles() throws {
+        let json = """
+        {"testNodes":[{"nodeType":"Test Plan","children":[
+          {"nodeType":"Unit test bundle","name":"FeatureHomeTests","result":"Failed",
+           "children":[{"nodeType":"Test Suite","name":"HomeTests","result":"Failed"}]},
+          {"nodeType":"Unit test bundle","name":"DomainSettingsTests","result":"Passed"}
+        ]}]}
+        """
+
+        #expect(TestedScope.testTargetNames(inTestResults: Data(json.utf8), failedOnly: true) == ["FeatureHomeTests"])
+        #expect(TestedScope.testTargetNames(inTestResults: Data(json.utf8)).count == 2)
+    }
+
     @Test("reads the newer xctestrun layout")
     func formatTwo() {
         let names = TestedScope.testTargetNames(in: [
