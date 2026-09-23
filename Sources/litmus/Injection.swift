@@ -40,6 +40,9 @@ struct Injection {
             print("  the whole tree")
         }
 
+        Interruption.install()
+        try RunLock.acquire(for: workingCopy)
+
         // Copied first, so the suite can run in the copy before any mutant is
         // in it: the scheme that runs every test exists only there.
         try ProjectInjection.clone(project, to: workingCopy)

@@ -141,6 +141,8 @@ extension Xcodebuild: BatchingHarness {
         defer { pipe.fileHandleForReading.readabilityHandler = nil }
 
         try process.run()
+        Subprocess.track(process)
+        defer { Subprocess.untrack(process) }
 
         var report = Batch.Report(url: resultsFile)
         var verdicts: [String: Verdict] = [:]
