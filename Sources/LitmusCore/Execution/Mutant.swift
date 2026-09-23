@@ -17,6 +17,10 @@ public struct Mutant: Sendable, Equatable {
     /// read is the one it keeps, so it needs a process of its own.
     public let evaluatedOnce: Bool
 
+    /// What the change is, for a person reading the report. Nil in a plan
+    /// written before Litmus recorded it.
+    public let change: Change?
+
     public init(
         filePath: String,
         line: Int,
@@ -24,7 +28,8 @@ public struct Mutant: Sendable, Equatable {
         utf8Offset: Int,
         operator: String,
         description: String,
-        evaluatedOnce: Bool = false
+        evaluatedOnce: Bool = false,
+        change: Change? = nil
     ) {
         self.filePath = filePath
         self.line = line
@@ -33,6 +38,7 @@ public struct Mutant: Sendable, Equatable {
         self.operator = `operator`
         self.description = description
         self.evaluatedOnce = evaluatedOnce
+        self.change = change
     }
 
     public var fileName: String {
@@ -47,6 +53,35 @@ public struct Mutant: Sendable, Equatable {
     public var switchName: String {
         let stem = URL(fileURLWithPath: filePath).deletingPathExtension().lastPathComponent
         return [stem, `operator`, "\(line)", "\(column)", "\(utf8Offset)"].joined(separator: "_")
+    }
+}
+
+/// The code a mutant changes, and what it becomes.
+public struct Change: Sendable, Equatable {
+    /// Where the changed code starts and ends. Wider than the mutant's own
+    /// position, which is the operator's: `a == b` is shown whole.
+    public let startLine: Int
+    public let startColumn: Int
+    public let endLine: Int
+    public let endColumn: Int
+    /// The code as written, and as the mutant has it.
+    public let original: String
+    public let replacement: String
+    /// The function, initializer or property it sits in, with its type:
+    /// `GameResultViewModel.handleRowTap(for:)`. Nil at file scope.
+    public let function: String?
+
+    public init(
+        startLine: Int, startColumn: Int, endLine: Int, endColumn: Int,
+        original: String, replacement: String, function: String?
+    ) {
+        self.startLine = startLine
+        self.startColumn = startColumn
+        self.endLine = endLine
+        self.endColumn = endColumn
+        self.original = original
+        self.replacement = replacement
+        self.function = function
     }
 }
 

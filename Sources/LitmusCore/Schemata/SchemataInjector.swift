@@ -79,7 +79,8 @@ public struct SchemataInjector: Sendable {
                 utf8Offset: site.position.utf8Offset,
                 operator: site.operator,
                 description: site.description,
-                evaluatedOnce: site.evaluatedOnce
+                evaluatedOnce: site.evaluatedOnce,
+                change: site.change
             )
         }
 

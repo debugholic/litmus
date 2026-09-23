@@ -16,6 +16,17 @@ public enum Plan {
                     "operator": mutant.operator,
                     "description": mutant.description,
                     "evaluatedOnce": mutant.evaluatedOnce,
+                    "change": mutant.change.map { change in
+                        [
+                            "startLine": change.startLine,
+                            "startColumn": change.startColumn,
+                            "endLine": change.endLine,
+                            "endColumn": change.endColumn,
+                            "original": change.original,
+                            "replacement": change.replacement,
+                            "function": change.function as Any,
+                        ] as [String: Any]
+                    } as Any,
                 ] as [String: Any]
             },
         ]
@@ -54,7 +65,23 @@ public enum Plan {
                 utf8Offset: utf8Offset,
                 operator: `operator`,
                 description: entry["description"] as? String ?? `operator`,
-                evaluatedOnce: entry["evaluatedOnce"] as? Bool ?? false
+                evaluatedOnce: entry["evaluatedOnce"] as? Bool ?? false,
+                change: (entry["change"] as? [String: Any]).flatMap { change in
+                    guard
+                        let startLine = change["startLine"] as? Int,
+                        let startColumn = change["startColumn"] as? Int,
+                        let endLine = change["endLine"] as? Int,
+                        let endColumn = change["endColumn"] as? Int,
+                        let original = change["original"] as? String,
+                        let replacement = change["replacement"] as? String
+                    else { return nil }
+                    return Change(
+                        startLine: startLine, startColumn: startColumn,
+                        endLine: endLine, endColumn: endColumn,
+                        original: original, replacement: replacement,
+                        function: change["function"] as? String
+                    )
+                }
             )
         }
     }

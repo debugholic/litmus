@@ -113,7 +113,10 @@ struct Run: AsyncParsableCommand {
             progress: { Self.show($0) }
         )(check.injected)
 
-        let rendered = try Report(summary).rendered(as: format)
+        // A plan's copy has no original beside it; its own files are what
+        // there is to show.
+        let report = Report(summary, workingCopy: working, project: plan == nil ? project : working)
+        let rendered = try report.rendered(as: format)
 
         if let output {
             try rendered.write(toFile: output, atomically: true, encoding: .utf8)
@@ -121,6 +124,26 @@ struct Run: AsyncParsableCommand {
         } else {
             print("\n" + rendered)
         }
+
+        // Always kept, beside the working copy's source. A run is an hour on
+        // a large project, and its results should outlive the terminal.
+        let html = working.appendingPathComponent("litmus-report.html")
+        try report.rendered(as: .html).write(to: html, atomically: true, encoding: .utf8)
+        try report.rendered(as: .stryker).write(
+            to: working.appendingPathComponent("litmus-report.json"),
+            atomically: true,
+            encoding: .utf8
+        )
+        print("\n  report: \(Self.link(to: html))")
+    }
+
+    /// A `file://` address with spaces escaped, so a terminal makes the whole
+    /// path one link; on a terminal that understands OSC 8, the name itself
+    /// is the link.
+    static func link(to file: URL) -> String {
+        let address = file.standardizedFileURL.absoluteString
+        guard isatty(STDOUT_FILENO) != 0 else { return address }
+        return "\u{1B}]8;;\(address)\u{1B}\\\(address)\u{1B}]8;;\u{1B}\\"
     }
 
     /// The copy to run in, and what to run in it.
