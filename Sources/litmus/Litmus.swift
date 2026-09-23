@@ -113,7 +113,10 @@ struct Run: AsyncParsableCommand {
             progress: { Self.show($0) }
         )(check.injected)
 
-        let rendered = try Report(summary).rendered(as: format)
+        // A plan's copy has no original beside it; its own files are what
+        // there is to show.
+        let report = Report(summary, workingCopy: working, project: plan == nil ? project : working)
+        let rendered = try report.rendered(as: format)
 
         if let output {
             try rendered.write(toFile: output, atomically: true, encoding: .utf8)
@@ -121,6 +124,26 @@ struct Run: AsyncParsableCommand {
         } else {
             print("\n" + rendered)
         }
+
+        // Always kept, beside the working copy's source. A run is an hour on
+        // a large project, and its results should outlive the terminal.
+        let html = working.appendingPathComponent("litmus-report.html")
+        try report.rendered(as: .html).write(to: html, atomically: true, encoding: .utf8)
+        try report.rendered(as: .stryker).write(
+            to: working.appendingPathComponent("litmus-report.json"),
+            atomically: true,
+            encoding: .utf8
+        )
+        print("\n  report: \(Self.link(to: html))")
+    }
+
+    /// A `file://` address with spaces escaped, so a terminal makes the whole
+    /// path one link; on a terminal that understands OSC 8, the name itself
+    /// is the link.
+    static func link(to file: URL) -> String {
+        let address = file.standardizedFileURL.absoluteString
+        guard isatty(STDOUT_FILENO) != 0 else { return address }
+        return "\u{1B}]8;;\(address)\u{1B}\\\(address)\u{1B}]8;;\u{1B}\\"
     }
 
     /// The copy to run in, and what to run in it.
@@ -182,13 +205,12 @@ struct Run: AsyncParsableCommand {
     /// honest thing to do is to name the step before waiting on it.
     /// One at a time: the steps below never overlap, and a mutant's own line
     /// is printed the moment it starts.
-    private static let heartbeat = Heartbeat()
+    private static let heartbeat = Heartbeat.shared
 
     private static func show(_ step: MutationRun.Step) {
         switch step {
         case .building:
-            print("  building once, with every mutant switched off…")
-            heartbeat.begin()
+            heartbeat.begin("  building once, with every mutant switched off…")
 
         case let .unviable(mutants):
             heartbeat.end()
@@ -199,7 +221,7 @@ struct Run: AsyncParsableCommand {
             if mutants.count > 10 {
                 print("    … and \(mutants.count - 10) more")
             }
-            heartbeat.begin()
+            heartbeat.begin("  building again…")
 
         case let .scoped(modules, kept, dropped):
             heartbeat.end()
@@ -213,8 +235,7 @@ struct Run: AsyncParsableCommand {
 
         case let .preparingBatch(targets):
             heartbeat.end()
-            print("  adding the in-process driver to \(targets) test target(s) and rebuilding…")
-            heartbeat.begin()
+            heartbeat.begin("  adding the in-process driver to \(targets) test target(s) and rebuilding…")
 
         case let .target(name, mutants, isolated):
             heartbeat.end()
@@ -231,28 +252,35 @@ struct Run: AsyncParsableCommand {
 
         case .checkingBaseline:
             heartbeat.end()
-            print("  running the suite untouched, to check it passes…")
-            heartbeat.begin()
+            heartbeat.begin("  running the suite untouched, to check it passes…")
 
         case let .baselinePassed(duration):
-            heartbeat.end()
-            print("  baseline passed in \(time(duration))\n")
+            heartbeat.end(keep: false)
+            print("  baseline passed in \(time(duration))")
+
+        case .probing:
+            heartbeat.begin("  running each test alone, to see which mutants it reaches…")
+
+        case let .probed(duration):
+            heartbeat.end(keep: false)
+            print("  probed in \(time(duration)) — each mutant now runs only the tests that reach it\n")
 
         case let .evaluatedOnce(count):
             print("\n  \(count) mutant(s) in a global or static value, each in a process of its own:")
 
         case let .started(mutant):
-            print("  → \(location(mutant))  \(mutant.description)")
-            heartbeat.begin()
+            heartbeat.begin("  → \(location(mutant))  \(mutant.description)")
 
         case let .finished(result, done, total):
-            heartbeat.end()
+            // The result line takes the place of the running one.
+            heartbeat.end(keep: !Heartbeat.live)
             let mark: String
             switch result.verdict {
             case .killed: mark = "✔ killed  ".green
             case .survived: mark = "✘ survived".red
             case .timedOut: mark = "✔ timeout ".green
             case .unviable: mark = "– unviable".yellow
+            case .noCoverage: mark = "– no test ".yellow
             case .error: mark = "– error   ".yellow
             }
 

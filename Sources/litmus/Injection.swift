@@ -51,10 +51,8 @@ struct Injection {
                 print("  \($0)")
             }
 
-            print("  measuring coverage — building and running the suite once…")
-
-            let heartbeat = Heartbeat()
-            heartbeat.begin()
+            let heartbeat = Heartbeat.shared
+            heartbeat.begin("  measuring coverage — building and running the suite once…")
             defer { heartbeat.end() }
 
             let measured = try Self.measure(testHarness, lane: lanes[0], in: workingCopy, heartbeat: heartbeat)
@@ -127,7 +125,7 @@ struct Injection {
 
                 heartbeat.end()
                 print("  leaving out \(dropped.joined(separator: ", ")) — it does not build, or its own tests fail")
-                heartbeat.begin()
+                heartbeat.begin("  measuring coverage again, without them…")
 
                 // Everything built and ran; only tests failed. What ran was
                 // measured, and running it all again would measure it again.

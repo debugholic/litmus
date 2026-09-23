@@ -14,7 +14,8 @@ enum Subprocess {
         arguments: [String],
         directory: URL,
         environment: [String: String] = [:],
-        timeout: TimeInterval? = nil
+        timeout: TimeInterval? = nil,
+        onLine: (@Sendable (String) -> Void)? = nil
     ) throws -> Output {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -25,7 +26,7 @@ enum Subprocess {
 
         // Drained on its own thread: a full pipe buffer would otherwise stall
         // the child, and a test log easily exceeds it.
-        let log = Collected()
+        let log = Collected(onLine: onLine)
         let drained = DispatchSemaphore(value: 0)
         let pipe = Pipe()
         process.standardOutput = pipe
@@ -118,11 +119,29 @@ enum Subprocess {
     private final class Collected: @unchecked Sendable {
         private let lock = NSLock()
         private var data = Data()
+        private var partial = Data()
+        private let onLine: (@Sendable (String) -> Void)?
+
+        init(onLine: (@Sendable (String) -> Void)?) {
+            self.onLine = onLine
+        }
 
         func append(_ chunk: Data) {
             lock.lock()
-            defer { lock.unlock() }
             data.append(chunk)
+
+            // Whole lines only; the rest waits for the next chunk.
+            var lines: [String] = []
+            if onLine != nil {
+                partial.append(chunk)
+                while let newline = partial.firstIndex(of: UInt8(ascii: "\n")) {
+                    lines.append(String(decoding: partial[partial.startIndex..<newline], as: UTF8.self))
+                    partial = Data(partial[partial.index(after: newline)...])
+                }
+            }
+            lock.unlock()
+
+            lines.forEach { onLine?($0) }
         }
 
         var text: String {

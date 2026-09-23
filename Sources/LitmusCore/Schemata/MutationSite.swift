@@ -11,6 +11,8 @@ struct MutationSite {
     let mutation: Mutation
     /// See `Mutant.evaluatedOnce`.
     let evaluatedOnce: Bool
+    /// See `Mutant.change`.
+    let change: Change?
 }
 
 extension MutationSite {

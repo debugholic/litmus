@@ -90,8 +90,9 @@ struct ReportTests {
             ("Survived.swift", 20, .survived),
         ])).rendered(as: .plain)
 
-        // The file table names every file; the survivor list is what is checked.
-        let survivors = rendered.components(separatedBy: "survived —").last ?? ""
+        // The file table names every file; the list of what to test is what
+        // is checked.
+        let survivors = rendered.components(separatedBy: "what to test").last ?? ""
         #expect(survivors.contains("Survived.swift:20"))
         #expect(!survivors.contains("Killed.swift"))
     }
@@ -170,26 +171,32 @@ struct ReportTests {
 
     // MARK: - html
 
-    @Test("html escapes text that would otherwise close a tag")
-    func htmlEscaping() {
+    @Test("html keeps a closing script tag in a description from ending the page's script")
+    func htmlEscaping() throws {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("litmus-html-\(UUID().uuidString).swift")
+        try "let a = 1 <= 2\n".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+
         let result = MutantResult(
             mutant: Mutant(
-                filePath: "/project/Sources/A.swift",
+                filePath: file.path,
                 line: 10,
                 column: 5,
                 utf8Offset: 100,
                 operator: "RelationalOperatorReplacement",
-                description: "changed <= to > & back"
+                description: "changed </script> to x"
             ),
             verdict: .survived,
             duration: 1
         )
 
-        let rendered = try! Report(
+        let rendered = try Report(
             MutationRun.Summary(results: [result], duration: 1)
         ).rendered(as: .html)
 
-        #expect(rendered.contains("&lt;= to &gt; &amp; back"))
-        #expect(!rendered.contains("<= to > & back"))
+        #expect(rendered.contains("changed <\\/script> to x"))
+        // One for the viewer's tag, one for the report's.
+        #expect(rendered.components(separatedBy: "</script>").count == 3)
     }
 }

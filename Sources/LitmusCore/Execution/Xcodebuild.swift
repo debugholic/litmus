@@ -17,17 +17,22 @@ public struct Xcodebuild: Sendable, TestHarness {
     let workingDirectory: URL
     public let scheme: String
     let derivedDataPath: URL
+    /// Told what xcodebuild is doing whenever that changes: the target being
+    /// built, the bundle being tested, the tests finished so far.
+    let onActivity: (@Sendable (String) -> Void)?
 
     public init(
         executable: String = "/usr/bin/xcodebuild",
         workingDirectory: URL,
         scheme: String,
-        derivedDataPath: URL
+        derivedDataPath: URL,
+        onActivity: (@Sendable (String) -> Void)? = nil
     ) {
         self.executable = executable
         self.workingDirectory = workingDirectory
         self.scheme = scheme
         self.derivedDataPath = derivedDataPath
+        self.onActivity = onActivity
     }
 
     public func build(lane: String) throws -> BuiltTests {
@@ -310,11 +315,16 @@ public struct Xcodebuild: Sendable, TestHarness {
         arguments: [String],
         environment: [String: String] = [:]
     ) throws -> (log: String, status: Int32) {
+        let activity = XcodebuildActivity()
+        let report = onActivity
         let output = try Subprocess.run(
             executable: executable ?? self.executable,
             arguments: arguments,
             directory: workingDirectory,
-            environment: environment
+            environment: environment,
+            onLine: report.map { report in
+                { line in if let summary = activity.read(line) { report(summary) } }
+            }
         )
         return (output.log, output.status)
     }
