@@ -84,6 +84,30 @@ struct ProjectInjectionTests {
         #expect(copied.contains("__litmus_"))
     }
 
+    /// The copy used to be hardlinks, and a driver appended to a test file in
+    /// it turned up in the user's project. Whatever writes to the copy in
+    /// place has to leave the original alone.
+    @Test("keeps the original safe from writes made in place in the copy")
+    func inPlaceWriteStaysInCopy() throws {
+        let source = try Sandbox([
+            "Sources/A.swift": Self.mutable,
+            "Tests/ATests.swift": "// test\n",
+        ])
+        let destination = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("litmus-copy-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: destination) }
+
+        _ = try ProjectInjection()(project: source.root, workingCopy: destination)
+
+        let copied = destination.appendingPathComponent("Tests/ATests.swift")
+        let handle = try FileHandle(forWritingTo: copied)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("// appended in place\n".utf8))
+        try handle.close()
+
+        #expect(source.read("Tests/ATests.swift") == "// test\n")
+    }
+
     /// Test code is the thing being measured. Mutating it would let the suite
     /// grade itself.
     @Test("skips a Tests directory")

@@ -119,23 +119,60 @@ public struct ProjectInjection: Sendable {
         )
     }
 
+    /// Clones the project, then prunes what the build can make again.
+    ///
+    /// A clone rather than hardlinks. `rsync --link-dest` made every unchanged
+    /// file in the copy the same inode as the original, so anything that
+    /// wrote to one in place wrote to the other: a test driver appended to a
+    /// test file in the copy landed in the user's project. A clone shares
+    /// bytes until one side is written, then splits, which keeps the copy
+    /// free and the original untouched. Across volumes `cp -c` falls back to
+    /// an ordinary copy by itself.
     private func copy(_ project: URL, to destination: URL) throws {
         try? FileManager.default.removeItem(at: destination)
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
 
-        // rsync keeps the skip list in one place, and `--link-dest` makes every
-        // unchanged file a clone rather than a second copy of the bytes: on
-        // APFS that is instant and free, and a write to the copy still leaves
-        // the original alone. It only applies within one volume, which is why
-        // the working copy is put beside the project.
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/rsync")
-        process.arguments = ["-a", "--link-dest=\(project.path)"]
-            + Self.notCopied.sorted().flatMap { ["--exclude", $0] }
-            + ["\(project.path)/", "\(destination.path)/"]
+        let entries = try FileManager.default.contentsOfDirectory(atPath: project.path)
+            .filter { !Self.notCopied.contains($0) }
 
-        try process.run()
-        process.waitUntilExit()
+        for entry in entries {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/cp")
+            process.arguments = [
+                "-c", "-R", "-p",
+                project.appendingPathComponent(entry).path,
+                destination.appendingPathComponent(entry).path,
+            ]
+            try process.run()
+            process.waitUntilExit()
+
+            guard process.terminationStatus == 0 else {
+                throw CopyFailure(description: "could not copy \(entry) into the working copy")
+            }
+        }
+
+        try prune(destination)
+    }
+
+    /// Removes regenerable directories below the top level, such as an
+    /// example app's node_modules.
+    private func prune(_ root: URL) throws {
+        guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)
+        else { return }
+
+        var doomed: [URL] = []
+        for case let url as URL in walker where Self.notCopied.contains(url.lastPathComponent) {
+            doomed.append(url)
+            walker.skipDescendants()
+        }
+
+        for url in doomed {
+            try FileManager.default.removeItem(at: url)
+        }
+    }
+
+    public struct CopyFailure: Error, CustomStringConvertible {
+        public let description: String
     }
 
     private func swiftFiles(in root: URL) throws -> [URL] {
