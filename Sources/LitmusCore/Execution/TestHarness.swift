@@ -20,10 +20,32 @@ public struct BuiltTests: Sendable {
 public struct TestOutput: Sendable {
     public let log: String
     public let status: Int32
+    /// Stopped for running past its time. A mutant that turns a loop
+    /// infinite never finishes, and would otherwise hold the run forever.
+    public let timedOut: Bool
 
-    public init(log: String, status: Int32) {
+    public init(log: String, status: Int32, timedOut: Bool = false) {
         self.log = log
         self.status = status
+        self.timedOut = timedOut
+    }
+}
+
+/// A build that did not compile, with the whole log.
+///
+/// The log is kept rather than just the lines shown, because the errors in it
+/// say which mutants to take out before building again.
+public struct BuildFailure: Error, CustomStringConvertible {
+    public let log: String
+
+    public init(log: String) { self.log = log }
+
+    public var description: String {
+        """
+        the build failed:
+
+        \(Xcodebuild.errorLines(in: log))
+        """
     }
 }
 
@@ -40,8 +62,14 @@ public protocol TestHarness: Sendable {
     /// Builds the tests once, with every mutant compiled in but switched off.
     func build(lane: String) throws -> BuiltTests
 
-    /// Runs the built tests, with at most one mutant switched on.
-    func test(_ built: BuiltTests, lane: String, switchOn mutantSwitch: String?) throws -> TestOutput
+    /// Runs the built tests, with at most one mutant switched on, stopping
+    /// them after `timeout` seconds when one is given.
+    func test(
+        _ built: BuiltTests,
+        lane: String,
+        switchOn mutantSwitch: String?,
+        timeout: TimeInterval?
+    ) throws -> TestOutput
 
     /// Runs the suite once with coverage on, and reports what it reached.
     ///
@@ -60,6 +88,10 @@ public protocol TestHarness: Sendable {
 }
 
 extension TestHarness {
+    public func test(_ built: BuiltTests, lane: String, switchOn mutantSwitch: String?) throws -> TestOutput {
+        try test(built, lane: lane, switchOn: mutantSwitch, timeout: nil)
+    }
+
     public func testedScope(_ built: BuiltTests) -> TestedScope? { nil }
     public func coverageScope() -> TestedScope? { nil }
 }

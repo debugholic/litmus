@@ -24,7 +24,9 @@ public struct SchemataInjector: Sendable {
         return inject(source: original, path: path)
     }
 
-    func inject(source: String, path: String) -> Result {
+    /// `keeping` limits the file to those mutants, by switch name; nil keeps
+    /// every one the operators find.
+    func inject(source: String, path: String, keeping: Set<String>? = nil) -> Result {
         let tree = Parser.parse(source: source)
         let fileName = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
         let converter = SourceLocationConverter(fileName: path, tree: tree)
@@ -46,7 +48,9 @@ public struct SchemataInjector: Sendable {
             collector.walk(tree)
 
             for (span, found) in collector.sites {
-                sites[span, default: []].append(contentsOf: found)
+                let kept = found.filter { keeping?.contains($0.id) ?? true }
+                guard !kept.isEmpty else { continue }
+                sites[span, default: []].append(contentsOf: kept)
             }
         }
 
@@ -74,7 +78,8 @@ public struct SchemataInjector: Sendable {
                 column: site.position.column,
                 utf8Offset: site.position.utf8Offset,
                 operator: site.operator,
-                description: site.description
+                description: site.description,
+                evaluatedOnce: site.evaluatedOnce
             )
         }
 

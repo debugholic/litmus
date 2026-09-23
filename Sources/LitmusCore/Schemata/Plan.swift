@@ -15,6 +15,7 @@ public enum Plan {
                     "utf8Offset": mutant.utf8Offset,
                     "operator": mutant.operator,
                     "description": mutant.description,
+                    "evaluatedOnce": mutant.evaluatedOnce,
                 ] as [String: Any]
             },
         ]
@@ -52,7 +53,8 @@ public enum Plan {
                 column: column,
                 utf8Offset: utf8Offset,
                 operator: `operator`,
-                description: entry["description"] as? String ?? `operator`
+                description: entry["description"] as? String ?? `operator`,
+                evaluatedOnce: entry["evaluatedOnce"] as? Bool ?? false
             )
         }
     }

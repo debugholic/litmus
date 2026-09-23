@@ -29,11 +29,7 @@ public struct SwiftPackage: Sendable, TestHarness {
         let (log, status) = try run(arguments: ["build", "--build-tests"])
 
         guard status == 0 else {
-            throw Failure(description: """
-            the build failed:
-
-            \(Xcodebuild.errorLines(in: log))
-            """)
+            throw BuildFailure(log: log)
         }
 
         // Nothing to carry: `--skip-build` finds the products by itself.
@@ -43,7 +39,8 @@ public struct SwiftPackage: Sendable, TestHarness {
     public func test(
         _ built: BuiltTests,
         lane: String,
-        switchOn mutantSwitch: String?
+        switchOn mutantSwitch: String?,
+        timeout: TimeInterval?
     ) throws -> TestOutput {
         var environment: [String: String] = [:]
 
@@ -54,12 +51,15 @@ public struct SwiftPackage: Sendable, TestHarness {
             environment[MutationSwitch.activeVariable] = mutantSwitch
         }
 
-        let (log, status) = try run(
+        let output = try Subprocess.run(
+            executable: executable,
             arguments: ["test", "--skip-build"],
-            environment: environment
+            directory: workingDirectory,
+            environment: environment,
+            timeout: timeout
         )
 
-        return TestOutput(log: log, status: status)
+        return TestOutput(log: output.log, status: output.status, timedOut: output.timedOut)
     }
 
     /// `swift test --enable-code-coverage`, then `llvm-cov` for the counts.
@@ -133,24 +133,12 @@ public struct SwiftPackage: Sendable, TestHarness {
         arguments: [String],
         environment: [String: String] = [:]
     ) throws -> (log: String, status: Int32) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable ?? self.executable)
-        process.arguments = arguments
-        process.currentDirectoryURL = workingDirectory
-        process.environment = ProcessInfo.processInfo.environment
-            .merging(environment) { _, new in new }
-
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-
-        try process.run()
-
-        // Read before waiting: a full pipe buffer would otherwise deadlock the
-        // child, and a test log easily exceeds it.
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-
-        return (String(data: data, encoding: .utf8) ?? "", process.terminationStatus)
+        let output = try Subprocess.run(
+            executable: executable ?? self.executable,
+            arguments: arguments,
+            directory: workingDirectory,
+            environment: environment
+        )
+        return (output.log, output.status)
     }
 }

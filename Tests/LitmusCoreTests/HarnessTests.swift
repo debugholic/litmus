@@ -104,7 +104,7 @@ struct HarnessTests {
         let tool = try FakeTool(printing: "error: build failed", exiting: 1)
         let package = SwiftPackage(executable: tool.path, workingDirectory: workingDirectory)
 
-        #expect(throws: SwiftPackage.Failure.self) {
+        #expect(throws: BuildFailure.self) {
             try package.build(lane: "worker 1")
         }
     }

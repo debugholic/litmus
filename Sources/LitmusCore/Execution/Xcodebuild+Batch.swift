@@ -139,11 +139,11 @@ extension Xcodebuild: BatchingHarness {
             if let running = current {
                 let limit = running.id == Batch.baseline ? timeouts.baseline : timeouts.mutant
                 if Date().timeIntervalSince(running.started) > limit {
-                    stop(process)
+                    Subprocess.stop(process)
                     break
                 }
             } else if !reported, Date().timeIntervalSince(launched) > timeouts.launch {
-                stop(process)
+                Subprocess.stop(process)
                 throw Failure(description: """
                 the test runner never started:
 
@@ -162,20 +162,6 @@ extension Xcodebuild: BatchingHarness {
             unfinished: current.map { ($0.id, Date().timeIntervalSince($0.started)) },
             log: log.text
         )
-    }
-
-    /// Asks, then insists.
-    private func stop(_ process: Process) {
-        process.terminate()
-
-        let deadline = Date().addingTimeInterval(30)
-        while process.isRunning, Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.5)
-        }
-
-        if process.isRunning {
-            kill(process.processIdentifier, SIGKILL)
-        }
     }
 }
 

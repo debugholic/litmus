@@ -8,7 +8,17 @@ struct TestSuiteOutcome {
     let verdict: Verdict
 
     init(_ output: TestOutput) {
-        self.init(log: output.log, status: output.status)
+        // Stopped rather than finished: the suite did not pass with the
+        // mutant on, the same as a batch reads a mutant that hangs.
+        if output.timedOut {
+            self.init(verdict: .killed)
+        } else {
+            self.init(log: output.log, status: output.status)
+        }
+    }
+
+    private init(verdict: Verdict) {
+        self.verdict = verdict
     }
 
     init(log: String, status: Int32) {

@@ -11,11 +11,21 @@ public struct MutationRun: Sendable {
         /// Whether to run many mutants in one test process when the tests
         /// allow it. Off means a fresh process for every mutant.
         public let batching: Bool
+        /// Takes the mutants a failed build names out of the source and
+        /// returns them, or none when it cannot tell which. Without it, a
+        /// build that fails ends the run.
+        public let repair: (@Sendable (_ log: String, _ mutants: [Mutant]) throws -> [Mutant])?
 
-        public init(harness: any TestHarness, lanes: [String], batching: Bool = true) {
+        public init(
+            harness: any TestHarness,
+            lanes: [String],
+            batching: Bool = true,
+            repair: (@Sendable (_ log: String, _ mutants: [Mutant]) throws -> [Mutant])? = nil
+        ) {
             self.harness = harness
             self.lanes = lanes
             self.batching = batching
+            self.repair = repair
         }
     }
 
@@ -65,6 +75,9 @@ public struct MutationRun: Sendable {
     /// minutes says so before it starts.
     public enum Step: Sendable {
         case building
+        /// The compiler rejected these; they were taken out and the build is
+        /// being tried again.
+        case unviable([Mutant])
         /// The build said which modules the tests are aimed at, and mutants
         /// outside them were left out.
         case scoped(modules: [String], kept: Int, dropped: Int)
@@ -74,6 +87,9 @@ public struct MutationRun: Sendable {
         case oneProcessPerMutant(String)
         case checkingBaseline
         case baselinePassed(TimeInterval)
+        /// The batch is done; these mutants sit in values Swift computes once,
+        /// and each now runs in a process of its own.
+        case evaluatedOnce(Int)
         case started(Mutant)
         case finished(MutantResult, done: Int, of: Int)
     }
@@ -94,11 +110,11 @@ public struct MutationRun: Sendable {
         let harness = configuration.harness
 
         progress(.building)
-        let built = try harness.build(lane: configuration.lanes[0])
+        var mutants = mutants
+        let (built, unviable) = try build(&mutants)
 
         // A mutant in code these tests never look at survives whatever it
         // does, and each one costs a full run to prove it.
-        var mutants = mutants
         let scope = harness.testedScope(built)
         if let scope {
             let kept = mutants.filter { scope.contains($0.filePath) }
@@ -106,15 +122,18 @@ public struct MutationRun: Sendable {
             mutants = kept
         }
 
+        let rejected = unviable.map { MutantResult(mutant: $0, verdict: .error, duration: 0) }
+
         guard !mutants.isEmpty else {
-            return Summary(results: [], duration: Date().timeIntervalSince(started))
+            return Summary(results: rejected, duration: Date().timeIntervalSince(started))
         }
 
         if configuration.batching, let batching = harness as? any BatchingHarness {
             if let scope, scope.batchIneligibility == nil {
                 progress(.preparingBatch)
                 if let plan = try batching.prepareBatch(built, scope: scope, lane: configuration.lanes[0]) {
-                    return try await runBatched(plan, mutants, using: batching, started: started)
+                    let summary = try await runBatched(plan, mutants, using: batching, started: started)
+                    return Summary(results: rejected + summary.results, duration: summary.duration)
                 }
             } else {
                 progress(.oneProcessPerMutant(
@@ -129,54 +148,57 @@ public struct MutationRun: Sendable {
         progress(.checkingBaseline)
         let baselineStarted = Date()
 
+        var timeouts = Batch.Timeouts()
         let baseline = try harness.test(
             built,
             lane: configuration.lanes[0],
-            switchOn: nil
+            switchOn: nil,
+            timeout: timeouts.baseline
         )
         let baselineVerdict = TestSuiteOutcome(baseline).verdict
         guard baselineVerdict == .survived else {
             throw Failure.baselineNotGreen(baselineVerdict)
         }
 
-        progress(.baselinePassed(Date().timeIntervalSince(baselineStarted)))
+        let baselineDuration = Date().timeIntervalSince(baselineStarted)
+        progress(.baselinePassed(baselineDuration))
 
-        // Each task hands its lane back, because that is the one that just came
-        // free. Picking by a counter instead would stack two mutants on one
-        // simulator while another sat idle.
-        let results = try await withThrowingTaskGroup(
-            of: (result: MutantResult, lane: String).self
-        ) { group in
-            var pending = mutants[...]
-            var collected: [MutantResult] = []
+        // Measured on a whole launch, like every run after it, so ten times
+        // this leaves a slow mutant room and still stops an infinite loop.
+        timeouts.learn(baseline: baselineDuration)
 
-            // One in flight per lane. Each worker owns its lane, and they only
-            // read what the build produced, so nothing serialises them.
-            for lane in configuration.lanes {
-                guard let mutant = pending.popFirst() else { break }
-                progress(.started(mutant))
-                group.addTask {
-                    (try run(mutant, in: lane, built: built, using: harness), lane)
-                }
+        let results = try await runEach(
+            mutants, built: built, timeout: timeouts.mutant, tally: Tally(total: mutants.count)
+        )
+
+        return Summary(results: rejected + results, duration: Date().timeIntervalSince(started))
+    }
+
+    /// Builds, taking out whatever the compiler rejects until the rest builds.
+    ///
+    /// Bounded, because each round is a build: a repair that keeps finding
+    /// something new is not converging, and the log says why better than
+    /// another attempt would.
+    private func build(_ mutants: inout [Mutant]) throws -> (BuiltTests, [Mutant]) {
+        var unviable: [Mutant] = []
+
+        for _ in 0..<5 {
+            do {
+                return (try configuration.harness.build(lane: configuration.lanes[0]), unviable)
+            } catch let failure as BuildFailure {
+                guard let repair = configuration.repair else { throw failure }
+
+                let pulled = try repair(failure.log, mutants)
+                guard !pulled.isEmpty else { throw failure }
+
+                let ids = Set(pulled.map(\.switchName))
+                mutants.removeAll { ids.contains($0.switchName) }
+                unviable += pulled
+                progress(.unviable(pulled))
             }
-
-            while let finished = try await group.next() {
-                collected.append(finished.result)
-                progress(.finished(finished.result, done: collected.count, of: mutants.count))
-
-                if let mutant = pending.popFirst() {
-                    let lane = finished.lane
-                    progress(.started(mutant))
-                    group.addTask {
-                        (try run(mutant, in: lane, built: built, using: harness), lane)
-                    }
-                }
-            }
-
-            return collected
         }
 
-        return Summary(results: results, duration: Date().timeIntervalSince(started))
+        return (try configuration.harness.build(lane: configuration.lanes[0]), unviable)
     }
 
     /// Every lane runs its share of the mutants in one process. The first
@@ -192,9 +214,14 @@ public struct MutationRun: Sendable {
         let tally = Tally(total: mutants.count)
         let progress = self.progress
 
+        // A value Swift computes once keeps whichever mutant was on when it
+        // was first read, so those get a fresh process each, after the batch.
+        let alone = mutants.filter(\.evaluatedOnce)
+        let batched = mutants.filter { !$0.evaluatedOnce }
+
         // Round robin, so each lane gets a mix rather than one file's worth.
         var shares = Array(repeating: [String](), count: lanes.count)
-        for (index, mutant) in mutants.enumerated() {
+        for (index, mutant) in batched.enumerated() {
             shares[index % lanes.count].append(mutant.switchName)
         }
 
@@ -244,7 +271,7 @@ public struct MutationRun: Sendable {
             throw Failure.baselineNotGreen(baseline)
         }
 
-        let results = mutants.map { mutant in
+        let results = batched.map { mutant in
             MutantResult(
                 mutant: mutant,
                 verdict: outcomes.verdicts[mutant.switchName] ?? .error,
@@ -252,17 +279,70 @@ public struct MutationRun: Sendable {
             )
         }
 
-        return Summary(results: results, duration: Date().timeIntervalSince(started))
+        if !alone.isEmpty { progress(.evaluatedOnce(alone.count)) }
+        // The batch's baseline ran inside a process that was already up, so it
+        // says nothing about how long a launch takes; the default allows one.
+        let separate = try await runEach(
+            alone, built: plan.built, timeout: Batch.Timeouts().mutant, tally: tally
+        )
+
+        return Summary(results: results + separate, duration: Date().timeIntervalSince(started))
+    }
+
+    /// One fresh process per mutant, one in flight per lane.
+    private func runEach(
+        _ mutants: [Mutant],
+        built: BuiltTests,
+        timeout: TimeInterval,
+        tally: Tally
+    ) async throws -> [MutantResult] {
+        let harness = configuration.harness
+
+        // Each task hands its lane back, because that is the one that just came
+        // free. Picking by a counter instead would stack two mutants on one
+        // simulator while another sat idle.
+        return try await withThrowingTaskGroup(
+            of: (result: MutantResult, lane: String).self
+        ) { group in
+            var pending = mutants[...]
+            var collected: [MutantResult] = []
+
+            // One in flight per lane. Each worker owns its lane, and they only
+            // read what the build produced, so nothing serialises them.
+            for lane in configuration.lanes {
+                guard let mutant = pending.popFirst() else { break }
+                progress(.started(mutant))
+                group.addTask {
+                    (try run(mutant, in: lane, built: built, timeout: timeout, using: harness), lane)
+                }
+            }
+
+            while let finished = try await group.next() {
+                collected.append(finished.result)
+                progress(.finished(finished.result, done: tally.next(), of: tally.total))
+
+                if let mutant = pending.popFirst() {
+                    let lane = finished.lane
+                    progress(.started(mutant))
+                    group.addTask {
+                        (try run(mutant, in: lane, built: built, timeout: timeout, using: harness), lane)
+                    }
+                }
+            }
+
+            return collected
+        }
     }
 
     private func run(
         _ mutant: Mutant,
         in lane: String,
         built: BuiltTests,
+        timeout: TimeInterval,
         using harness: any TestHarness
     ) throws -> MutantResult {
         let started = Date()
-        let log = try harness.test(built, lane: lane, switchOn: mutant.switchName)
+        let log = try harness.test(built, lane: lane, switchOn: mutant.switchName, timeout: timeout)
 
         return MutantResult(
             mutant: mutant,

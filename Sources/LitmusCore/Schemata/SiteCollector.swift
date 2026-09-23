@@ -32,6 +32,7 @@ final class SiteCollector: SyntaxVisitor {
         }
 
         record(
+            node,
             at: node.operator.startLocation(converter: converter),
             on: SourceSpan(element.sequence),
             description: "changed \(text) to \(replacement)",
@@ -52,6 +53,7 @@ final class SiteCollector: SyntaxVisitor {
         }
 
         record(
+            node,
             at: node.startLocation(converter: converter),
             on: SourceSpan(element.sequence),
             description: "swapped the branches of a ternary",
@@ -69,6 +71,7 @@ final class SiteCollector: SyntaxVisitor {
         }
 
         record(
+            node,
             at: node.startLocation(converter: converter),
             on: SourceSpan(node),
             description: "removed a call whose result is unused",
@@ -81,6 +84,7 @@ final class SiteCollector: SyntaxVisitor {
     // MARK: - helpers
 
     private func record(
+        _ node: some SyntaxProtocol,
         at location: SourceLocation,
         on span: SourceSpan,
         description: String,
@@ -98,7 +102,8 @@ final class SiteCollector: SyntaxVisitor {
                 position: position,
                 operator: `operator`.name,
                 description: description,
-                mutation: mutation
+                mutation: mutation,
+                evaluatedOnce: node.isEvaluatedOnce
             )
         )
     }
@@ -121,6 +126,51 @@ final class SiteCollector: SyntaxVisitor {
         }
 
         return (sequence, index)
+    }
+}
+
+private extension SyntaxProtocol {
+    /// Inside the initial value of a global or a static property.
+    ///
+    /// Swift runs those once, the first time they are read, and keeps the
+    /// result. Anything a function, an initializer or an accessor runs is run
+    /// again on every call, so reaching one of those first means no. Closures
+    /// do not stop the walk: `static let x = { … }()` runs its body once too.
+    var isEvaluatedOnce: Bool {
+        var current = parent
+        while let node = current {
+            if node.is(FunctionDeclSyntax.self)
+                || node.is(InitializerDeclSyntax.self)
+                || node.is(DeinitializerDeclSyntax.self)
+                || node.is(SubscriptDeclSyntax.self)
+                || node.is(AccessorBlockSyntax.self) {
+                return false
+            }
+
+            if let variable = node.as(VariableDeclSyntax.self),
+               variable.isStatic || variable.isGlobal {
+                return true
+            }
+
+            current = node.parent
+        }
+
+        return false
+    }
+}
+
+private extension VariableDeclSyntax {
+    var isStatic: Bool {
+        modifiers.contains {
+            $0.name.tokenKind == .keyword(.static) || $0.name.tokenKind == .keyword(.class)
+        }
+    }
+
+    /// Declared at file scope.
+    var isGlobal: Bool {
+        parent?.as(CodeBlockItemSyntax.self)?
+            .parent?.as(CodeBlockItemListSyntax.self)?
+            .parent?.is(SourceFileSyntax.self) ?? false
     }
 }
 

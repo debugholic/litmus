@@ -94,8 +94,17 @@ struct Run: AsyncParsableCommand {
 
         print("\n\(check.injected.count) mutants, \(lanes.count) at a time\n")
 
+        // A plan brings its own copy, with no original beside it to rewrite
+        // a rejected file from.
+        let repair = plan == nil ? BuildRepair(project: project, workingCopy: working) : nil
+
         let summary = try await MutationRun(
-            configuration: .init(harness: testHarness, lanes: lanes, batching: !isolate),
+            configuration: .init(
+                harness: testHarness,
+                lanes: lanes,
+                batching: !isolate,
+                repair: repair.map { repair in { try repair(log: $0, mutants: $1) } }
+            ),
             progress: { Self.show($0) }
         )(check.injected)
 
@@ -155,6 +164,17 @@ struct Run: AsyncParsableCommand {
             print("  building once, with every mutant switched off…")
             heartbeat.begin()
 
+        case let .unviable(mutants):
+            heartbeat.end()
+            print("  the compiler rejected \(mutants.count) mutant(s) — taking them out and building again:".yellow)
+            for mutant in mutants.prefix(10) {
+                print("    \(location(mutant))  \(mutant.description)")
+            }
+            if mutants.count > 10 {
+                print("    … and \(mutants.count - 10) more")
+            }
+            heartbeat.begin()
+
         case let .scoped(modules, kept, dropped):
             heartbeat.end()
             print("  these tests are aimed at \(modules.joined(separator: ", "))")
@@ -181,6 +201,9 @@ struct Run: AsyncParsableCommand {
         case let .baselinePassed(duration):
             heartbeat.end()
             print("  baseline passed in \(time(duration))\n")
+
+        case let .evaluatedOnce(count):
+            print("\n  \(count) mutant(s) in a global or static value, each in a process of its own:")
 
         case let .started(mutant):
             print("  → \(location(mutant))  \(mutant.description)")

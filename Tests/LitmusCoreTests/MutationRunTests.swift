@@ -97,7 +97,8 @@ struct MutationRunTests {
         func test(
             _ built: BuiltTests,
             lane: String,
-            switchOn mutantSwitch: String?
+            switchOn mutantSwitch: String?,
+            timeout: TimeInterval?
         ) throws -> TestOutput {
             ledger.begin(lane: lane, mutantSwitch: mutantSwitch)
             defer { ledger.end(lane: lane) }
@@ -255,5 +256,141 @@ struct MutationRunTests {
 
         #expect(summary.results.isEmpty)
         #expect(summary.score == nil)
+    }
+
+    // MARK: - batching
+
+    /// Runs a batch by handing every id to the stub, and records which ids
+    /// went through the batch and which got a process of their own.
+    private final class BatchStub: BatchingHarness, @unchecked Sendable {
+        let laneNoun = "lane"
+        let testFile: String
+        private let lock = NSLock()
+        private(set) var batchedIDs: [String] = []
+        private(set) var separateIDs: [String] = []
+
+        init(testFile: String) { self.testFile = testFile }
+
+        func build(lane: String) throws -> BuiltTests { BuiltTests() }
+        func coverage(lane: String) throws -> Coverage { Coverage(files: [:]) }
+
+        func testedScope(_ built: BuiltTests) -> TestedScope? {
+            TestedScope(
+                modules: ["Sample"],
+                files: ["/project/Sample.swift"],
+                testTargets: [.init(name: "SampleTests", files: [testFile])]
+            )
+        }
+
+        func test(
+            _ built: BuiltTests, lane: String, switchOn mutantSwitch: String?, timeout: TimeInterval?
+        ) throws -> TestOutput {
+            lock.lock()
+            defer { lock.unlock() }
+            if let mutantSwitch { separateIDs.append(mutantSwitch) }
+            return MutationRunTests.passing
+        }
+
+        func prepareBatch(_ built: BuiltTests, scope: TestedScope, lane: String) throws -> Batch.Plan? {
+            Batch.Plan(built: built, testTarget: "SampleTests")
+        }
+
+        func runBatch(
+            _ plan: Batch.Plan,
+            lane: String,
+            ids: [String],
+            timeouts: Batch.Timeouts,
+            onEvent: (Batch.Event) -> Void
+        ) throws -> [String: Verdict] {
+            lock.lock()
+            batchedIDs.append(contentsOf: ids)
+            lock.unlock()
+            return Dictionary(uniqueKeysWithValues: ids.map { ($0, .survived) })
+        }
+    }
+
+    @Test("gives a value Swift computes once a process of its own")
+    func evaluatedOnceLeavesTheBatch() async throws {
+        let testFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("litmus-\(UUID().uuidString).swift")
+        try "import Testing\n".write(to: testFile, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: testFile) }
+
+        let once = Mutant(
+            filePath: "/project/Sample.swift", line: 1, column: 1, utf8Offset: 1,
+            operator: "RelationalOperatorReplacement", description: "d", evaluatedOnce: true
+        )
+        let others = [mutant(2), mutant(3)]
+        let harness = BatchStub(testFile: testFile.path)
+
+        let summary = try await MutationRun(
+            configuration: .init(harness: harness, lanes: ["a"])
+        )(others + [once])
+
+        #expect(harness.separateIDs == [once.switchName])
+        #expect(harness.batchedIDs == [Batch.baseline] + others.map(\.switchName))
+        #expect(summary.results.count == 3)
+    }
+
+    // MARK: - build repair
+
+    /// Fails to build until the named mutants are gone.
+    private final class RejectingHarness: TestHarness, @unchecked Sendable {
+        let laneNoun = "lane"
+        private let lock = NSLock()
+        private var rejected: Set<String>
+        private(set) var builds = 0
+
+        init(rejecting ids: Set<String>) { rejected = ids }
+
+        func accept(_ ids: [String]) {
+            lock.lock(); defer { lock.unlock() }
+            rejected.subtract(ids)
+        }
+
+        func build(lane: String) throws -> BuiltTests {
+            lock.lock(); defer { lock.unlock() }
+            builds += 1
+            guard rejected.isEmpty else { throw BuildFailure(log: "error: rejected") }
+            return BuiltTests()
+        }
+
+        func coverage(lane: String) throws -> Coverage { Coverage(files: [:]) }
+
+        func test(
+            _ built: BuiltTests, lane: String, switchOn mutantSwitch: String?, timeout: TimeInterval?
+        ) throws -> TestOutput {
+            MutationRunTests.passing
+        }
+    }
+
+    @Test("reports a mutant the compiler rejected as an error and runs the rest")
+    func repairsBuild() async throws {
+        let mutants = (1...3).map(mutant)
+        let bad = mutants[1]
+        let harness = RejectingHarness(rejecting: [bad.switchName])
+
+        let summary = try await MutationRun(
+            configuration: .init(harness: harness, lanes: ["a"], repair: { _, _ in
+                harness.accept([bad.switchName])
+                return [bad]
+            })
+        )(mutants)
+
+        #expect(harness.builds == 2)
+        #expect(summary.errored == 1)
+        #expect(summary.survived == 2)
+        #expect(summary.results.first { $0.verdict == .error }?.mutant == bad)
+    }
+
+    @Test("stops when the repair cannot tell which mutant broke the build")
+    func unrepairable() async {
+        let harness = RejectingHarness(rejecting: ["x"])
+
+        await #expect(throws: BuildFailure.self) {
+            try await MutationRun(
+                configuration: .init(harness: harness, lanes: ["a"], repair: { _, _ in [] })
+            )([mutant(1)])
+        }
     }
 }

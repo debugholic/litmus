@@ -12,13 +12,19 @@ public struct Mutant: Sendable, Equatable {
     /// Human readable summary, e.g. "changed && to ||".
     public let description: String
 
+    /// Sits where Swift evaluates it once per process: a global or a static
+    /// property's initial value. Whichever mutant is on the first time it is
+    /// read is the one it keeps, so it needs a process of its own.
+    public let evaluatedOnce: Bool
+
     public init(
         filePath: String,
         line: Int,
         column: Int,
         utf8Offset: Int,
         operator: String,
-        description: String
+        description: String,
+        evaluatedOnce: Bool = false
     ) {
         self.filePath = filePath
         self.line = line
@@ -26,6 +32,7 @@ public struct Mutant: Sendable, Equatable {
         self.utf8Offset = utf8Offset
         self.operator = `operator`
         self.description = description
+        self.evaluatedOnce = evaluatedOnce
     }
 
     public var fileName: String {

@@ -9,6 +9,8 @@ struct MutationSite {
     let `operator`: String
     let description: String
     let mutation: Mutation
+    /// See `Mutant.evaluatedOnce`.
+    let evaluatedOnce: Bool
 }
 
 extension MutationSite {
