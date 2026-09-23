@@ -259,6 +259,25 @@ struct HarnessTests {
         #expect(built.artifact?.lastPathComponent == "App_iphonesimulator.xctestrun")
     }
 
+    /// One build should name every broken target, not stop at the first.
+    @Test("keeps building after an error, for the build and the coverage run")
+    func xcodebuildContinuesAfterErrors() throws {
+        let tool = try FakeTool(printing: "error: broken", exiting: 65)
+        let xcodebuild = Xcodebuild(
+            executable: tool.path,
+            workingDirectory: workingDirectory,
+            scheme: "MyApp",
+            derivedDataPath: URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("litmus-dd-\(UUID().uuidString)")
+        )
+
+        let build = #expect(throws: BuildFailure.self) { try xcodebuild.build(lane: "id=UDID") }
+        let coverage = #expect(throws: SuiteFailure.self) { try xcodebuild.coverage(lane: "id=UDID") }
+
+        #expect(build?.log.contains("-IDEBuildingContinueBuildingAfterErrors=YES") == true)
+        #expect(coverage?.log.contains("-IDEBuildingContinueBuildingAfterErrors=YES") == true)
+    }
+
     @Test("refuses to run without a build")
     func xcodebuildNeedsBuild() throws {
         let tool = try FakeTool()

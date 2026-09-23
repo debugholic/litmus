@@ -74,6 +74,7 @@ public struct Xcodebuild: Sendable, TestHarness {
             "-scheme", scheme,
             "-destination", destination,
             "-derivedDataPath", derivedDataPath.path,
+            Self.continueAfterErrors,
         ])
 
         // Checked, because a build that failed leaves no .xctestrun behind and
@@ -168,12 +169,31 @@ public struct Xcodebuild: Sendable, TestHarness {
             "-derivedDataPath", derivedDataPath.path,
             "-enableCodeCoverage", "YES",
             "-resultBundlePath", bundle.path,
+            Self.continueAfterErrors,
         ])
 
         guard status == 0 else {
             throw SuiteFailure(log: log)
         }
 
+        return try lastCoverage()
+    }
+
+    /// Keeps building the targets that can be built after one fails, so a
+    /// single build names every broken one. Otherwise each costs a build of
+    /// its own to find: on one project, four rounds of twenty minutes.
+    ///
+    /// A user default, which `xcodebuild -<default>=<value>` sets for the one
+    /// invocation.
+    static let continueAfterErrors = "-IDEBuildingContinueBuildingAfterErrors=YES"
+
+    /// The coverage of the last run, whatever else it said.
+    ///
+    /// A run whose only fault was failing tests still measured everything it
+    /// ran. Reading it saves running the whole suite again once the failing
+    /// targets are out.
+    public func lastCoverage() throws -> Coverage {
+        let bundle = coverageBundle
         let (report, reportStatus) = try run(
             executable: "/usr/bin/xcrun",
             arguments: ["xccov", "view", "--report", "--json", bundle.path]

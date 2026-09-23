@@ -85,7 +85,7 @@ public enum AllTestsScheme {
     /// Only those two lists are read. Every compile step in the log names
     /// its target the same way, failed or not, and reading them all once
     /// took every target in the project out of the scheme.
-    static func failures(in log: String) -> (targets: Set<String>, projects: Set<String>) {
+    public static func failures(in log: String) -> (targets: Set<String>, projects: Set<String>) {
         enum Section { case none, failedCommands, failingTests }
 
         var targets: Set<String> = []
