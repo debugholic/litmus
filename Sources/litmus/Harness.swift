@@ -72,7 +72,8 @@ struct HarnessOptions: ParsableArguments {
                 Xcodebuild(
                     workingDirectory: project,
                     scheme: scheme,
-                    derivedDataPath: project.appendingPathComponent("build/litmus")
+                    derivedDataPath: project.appendingPathComponent("build/litmus"),
+                    onActivity: { Heartbeat.shared.report($0) }
                 ),
                 try destinations(say: say)
             )
