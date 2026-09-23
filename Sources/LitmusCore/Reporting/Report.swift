@@ -35,7 +35,21 @@ public struct Report: Sendable {
         } else {
             lines.append("Litmus score —")
         }
-        lines.append("killed \(summary.killed) / survived \(summary.survived) / error \(summary.errored)")
+        lines.append(counts(summary.results))
+
+        // One file says nothing a second time; several are where the weak one
+        // hides behind the average.
+        let files = summary.files
+        if files.count > 1 {
+            let width = files.map(\.path.count).max() ?? 0
+            lines.append("")
+            lines.append("by file, weakest first:")
+            for file in files {
+                let score = file.score.map(percent) ?? "—"
+                let padded = file.path.padding(toLength: width, withPad: " ", startingAt: 0)
+                lines.append("  \(String(repeating: " ", count: max(0, 4 - score.count)))\(score)  \(padded)  \(counts(file.results))")
+            }
+        }
 
         let survivors = summary.results.filter { $0.verdict == .survived }
         guard !survivors.isEmpty else { return lines.joined(separator: "\n") }
@@ -56,8 +70,21 @@ public struct Report: Sendable {
             "score": summary.score as Any,
             "killed": summary.killed,
             "survived": summary.survived,
+            "timeout": summary.timedOut,
+            "unviable": summary.unviable,
             "error": summary.errored,
             "duration": summary.duration,
+            "files": summary.files.map { file in
+                [
+                    "path": file.path,
+                    "score": file.score as Any,
+                    "killed": file.count(.killed),
+                    "survived": file.count(.survived),
+                    "timeout": file.count(.timedOut),
+                    "unviable": file.count(.unviable),
+                    "error": file.count(.error),
+                ] as [String: Any]
+            },
             "mutants": summary.results.sorted(by: sortedByLocation).map { result in
                 [
                     "file": result.mutant.fileName,
@@ -123,12 +150,12 @@ public struct Report: Sendable {
           th, td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent); }
           .num { text-align: right; font-variant-numeric: tabular-nums; }
           .survived { background: color-mix(in srgb, crimson 12%, transparent); }
-          .error { opacity: .55; }
+          .error, .unviable { opacity: .55; }
         </style>
         </head>
         <body>
         <p class="score">\(summary.score.map(percent) ?? "—")</p>
-        <p>killed \(summary.killed) · survived \(summary.survived) · error \(summary.errored)</p>
+        <p>\(escape(counts(summary.results).replacingOccurrences(of: " / ", with: " · ")))</p>
         <table>
         <thead><tr><th>File</th><th class="num">Line</th><th>Change</th><th>Verdict</th></tr></thead>
         <tbody>
@@ -141,6 +168,18 @@ public struct Report: Sendable {
     }
 
     // MARK: - helpers
+
+    /// `killed 3 / survived 1 / error 0`, with timeouts and unviable mutants
+    /// only when there are any.
+    private func counts(_ results: [MutantResult]) -> String {
+        func count(_ verdict: Verdict) -> Int { results.count { $0.verdict == verdict } }
+
+        var parts = ["killed \(count(.killed))", "survived \(count(.survived))"]
+        if count(.timedOut) > 0 { parts.append("timeout \(count(.timedOut))") }
+        if count(.unviable) > 0 { parts.append("unviable \(count(.unviable))") }
+        parts.append("error \(count(.error))")
+        return parts.joined(separator: " / ")
+    }
 
     private func percent(_ value: Double) -> String {
         "\(Int(value.rounded()))%"

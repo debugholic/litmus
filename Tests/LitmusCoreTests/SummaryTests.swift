@@ -51,4 +51,20 @@ struct SummaryScoreTests {
         #expect(summary.survived == 1)
         #expect(summary.errored == 1)
     }
+
+    @Test("counts a timeout as caught and leaves unviable mutants out")
+    func timeoutAndUnviable() {
+        let summary = summary([.killed, .timedOut, .survived, .unviable])
+
+        #expect(summary.timedOut == 1)
+        #expect(summary.unviable == 1)
+        #expect(abs((summary.score ?? 0) - 200.0 / 3) < 0.000_1)
+    }
+
+    @Test("finds the directory every file shares")
+    func commonDirectory() {
+        #expect(MutationRun.Summary.commonDirectory(of: ["/p/A/x.swift", "/p/B/y.swift"]) == "/p/")
+        #expect(MutationRun.Summary.commonDirectory(of: ["/p/A/x.swift", "/p/A/y.swift"]) == "/p/A/")
+        #expect(MutationRun.Summary.commonDirectory(of: []) == "")
+    }
 }

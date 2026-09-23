@@ -215,6 +215,8 @@ struct Run: AsyncParsableCommand {
             switch result.verdict {
             case .killed: mark = "✔ killed  ".green
             case .survived: mark = "✘ survived".red
+            case .timedOut: mark = "✔ timeout ".green
+            case .unviable: mark = "– unviable".yellow
             case .error: mark = "– error   ".yellow
             }
 

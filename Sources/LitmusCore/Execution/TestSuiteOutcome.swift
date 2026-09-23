@@ -11,7 +11,7 @@ struct TestSuiteOutcome {
         // Stopped rather than finished: the suite did not pass with the
         // mutant on, the same as a batch reads a mutant that hangs.
         if output.timedOut {
-            self.init(verdict: .killed)
+            self.init(verdict: .timedOut)
         } else {
             self.init(log: output.log, status: output.status)
         }

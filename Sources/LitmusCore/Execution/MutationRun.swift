@@ -55,17 +55,62 @@ public struct MutationRun: Sendable {
 
         public var killed: Int { results.count { $0.verdict == .killed } }
         public var survived: Int { results.count { $0.verdict == .survived } }
+        public var timedOut: Int { results.count { $0.verdict == .timedOut } }
+        public var unviable: Int { results.count { $0.verdict == .unviable } }
         public var errored: Int { results.count { $0.verdict == .error } }
 
-        /// Killed over everything that actually produced a verdict.
-        ///
-        /// Mutants that failed to build are excluded rather than counted as
-        /// killed; folding them in would report a suite as stronger than it is.
-        public var score: Double? {
-            let scored = killed + survived
-            guard scored > 0 else { return nil }
-            return Double(killed) / Double(scored) * 100
+        /// Caught over everything that actually produced a verdict.
+        public var score: Double? { Self.score(results) }
+
+        /// A score for each file, weakest first.
+        public var files: [FileScore] {
+            let paths = results.map(\.mutant.filePath)
+            let root = Self.commonDirectory(of: paths)
+
+            return Dictionary(grouping: results, by: \.mutant.filePath)
+                .map { path, results in
+                    FileScore(
+                        path: root.isEmpty ? path : String(path.dropFirst(root.count)),
+                        results: results
+                    )
+                }
+                .sorted { ($0.score ?? 101, $0.path) < ($1.score ?? 101, $1.path) }
         }
+
+        /// Killed and timed out, over those plus survived.
+        ///
+        /// Mutants that did not build or could not run are left out rather
+        /// than counted as killed; folding them in would report a suite as
+        /// stronger than it is.
+        static func score(_ results: [MutantResult]) -> Double? {
+            let caught = results.count { $0.verdict == .killed || $0.verdict == .timedOut }
+            let scored = caught + results.count { $0.verdict == .survived }
+            guard scored > 0 else { return nil }
+            return Double(caught) / Double(scored) * 100
+        }
+
+        /// The directory every path sits under, with its trailing slash.
+        static func commonDirectory(of paths: [String]) -> String {
+            guard let first = paths.first else { return "" }
+            var parts = first.split(separator: "/", omittingEmptySubsequences: false).dropLast()
+
+            for path in paths.dropFirst() {
+                let other = path.split(separator: "/", omittingEmptySubsequences: false).dropLast()
+                let shared = zip(parts, other).prefix { $0 == $1 }.count
+                parts = parts.prefix(shared)
+            }
+
+            return parts.isEmpty ? "" : parts.joined(separator: "/") + "/"
+        }
+    }
+
+    public struct FileScore: Sendable {
+        /// Relative to the directory all the mutated files share.
+        public let path: String
+        public let results: [MutantResult]
+
+        public var score: Double? { Summary.score(results) }
+        public func count(_ verdict: Verdict) -> Int { results.count { $0.verdict == verdict } }
     }
 
     /// What a run is doing, as it does it.
@@ -122,7 +167,7 @@ public struct MutationRun: Sendable {
             mutants = kept
         }
 
-        let rejected = unviable.map { MutantResult(mutant: $0, verdict: .error, duration: 0) }
+        let rejected = unviable.map { MutantResult(mutant: $0, verdict: .unviable, duration: 0) }
 
         guard !mutants.isEmpty else {
             return Summary(results: rejected, duration: Date().timeIntervalSince(started))

@@ -52,6 +52,37 @@ struct ReportTests {
         #expect(rendered.contains("killed 1 / survived 1 / error 1"))
     }
 
+    @Test("plain scores each file, weakest first, when there are several")
+    func plainByFile() {
+        let rendered = try! Report(summary([
+            ("Strong.swift", 10, .killed),
+            ("Weak.swift", 10, .survived),
+            ("Weak.swift", 20, .killed),
+        ])).rendered(as: .plain)
+
+        let weak = try! #require(rendered.range(of: " 50%  Weak.swift"))
+        let strong = try! #require(rendered.range(of: "100%  Strong.swift"))
+        #expect(weak.lowerBound < strong.lowerBound)
+    }
+
+    @Test("plain leaves the file table out for a single file")
+    func plainOneFile() {
+        let rendered = try! Report(summary([("A.swift", 10, .killed)])).rendered(as: .plain)
+
+        #expect(!rendered.contains("by file"))
+    }
+
+    @Test("plain names timeouts and unviable mutants only when there are some")
+    func plainExtraCounts() {
+        let with = try! Report(summary([("A.swift", 10, .timedOut), ("A.swift", 20, .unviable)]))
+            .rendered(as: .plain)
+        let without = try! Report(summary([("A.swift", 10, .killed)])).rendered(as: .plain)
+
+        #expect(with.contains("killed 0 / survived 0 / timeout 1 / unviable 1 / error 0"))
+        #expect(!without.contains("timeout"))
+        #expect(!without.contains("unviable"))
+    }
+
     @Test("plain lists survivors and leaves killed mutants out")
     func plainSurvivors() {
         let rendered = try! Report(summary([
@@ -59,8 +90,10 @@ struct ReportTests {
             ("Survived.swift", 20, .survived),
         ])).rendered(as: .plain)
 
-        #expect(rendered.contains("Survived.swift:20"))
-        #expect(!rendered.contains("Killed.swift"))
+        // The file table names every file; the survivor list is what is checked.
+        let survivors = rendered.components(separatedBy: "survived —").last ?? ""
+        #expect(survivors.contains("Survived.swift:20"))
+        #expect(!survivors.contains("Killed.swift"))
     }
 
     @Test("plain says nothing about survivors when there are none")

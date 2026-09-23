@@ -378,9 +378,9 @@ struct MutationRunTests {
         )(mutants)
 
         #expect(harness.builds == 2)
-        #expect(summary.errored == 1)
+        #expect(summary.unviable == 1)
         #expect(summary.survived == 2)
-        #expect(summary.results.first { $0.verdict == .error }?.mutant == bad)
+        #expect(summary.results.first { $0.verdict == .unviable }?.mutant == bad)
     }
 
     @Test("stops when the repair cannot tell which mutant broke the build")

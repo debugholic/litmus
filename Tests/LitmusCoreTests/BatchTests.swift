@@ -128,8 +128,8 @@ struct BatchTests {
         #expect(events.filter { $0 == .started("-") }.count == 1)
     }
 
-    /// An infinite loop never ends by itself. It is stopped, counted as
-    /// killed, and the batch goes on.
+    /// An infinite loop never ends by itself. It is stopped, counted as a
+    /// timeout, and the batch goes on.
     @Test("stops a mutant that hangs, and carries on")
     func hang() throws {
         let runner = try FakeRunner()
@@ -137,7 +137,7 @@ struct BatchTests {
 
         let verdicts = try run(["-", "hang-a", "b"], with: runner, events: &events)
 
-        #expect(verdicts == ["-": .survived, "hang-a": .killed, "b": .survived])
+        #expect(verdicts == ["-": .survived, "hang-a": .timedOut, "b": .survived])
         #expect(runner.launches == 2)
     }
 

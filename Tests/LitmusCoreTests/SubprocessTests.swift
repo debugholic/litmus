@@ -59,10 +59,10 @@ struct SubprocessTests {
         #expect(kill(pid, 0) != 0)
     }
 
-    @Test("reads a run that was stopped as a kill")
+    @Test("reads a run that was stopped as a timeout")
     func timedOutIsKilled() {
         let output = TestOutput(log: "Test run with 3 tests in 1 suites passed", status: 0, timedOut: true)
 
-        #expect(TestSuiteOutcome(output).verdict == .killed)
+        #expect(TestSuiteOutcome(output).verdict == .timedOut)
     }
 }

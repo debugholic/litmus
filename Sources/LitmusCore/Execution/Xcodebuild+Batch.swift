@@ -36,8 +36,9 @@ extension Xcodebuild: BatchingHarness {
             // stopped for taking too long, took the process with it. A crash
             // or a hang: either way the suite did not pass with it on.
             if let unfinished = outcome.unfinished {
-                verdicts[unfinished.id] = .killed
-                onEvent(.finished(unfinished.id, .killed, unfinished.elapsed))
+                let verdict: Verdict = outcome.stopped ? .timedOut : .killed
+                verdicts[unfinished.id] = verdict
+                onEvent(.finished(unfinished.id, verdict, unfinished.elapsed))
             }
 
             // A red baseline ends the batch. Nothing after it means anything.
@@ -57,6 +58,8 @@ extension Xcodebuild: BatchingHarness {
     private struct Launch {
         var verdicts: [String: Verdict]
         var unfinished: (id: String, elapsed: TimeInterval)?
+        /// Litmus stopped it for running too long, rather than it crashing.
+        var stopped: Bool
         var log: String
     }
 
@@ -113,6 +116,7 @@ extension Xcodebuild: BatchingHarness {
         var verdicts: [String: Verdict] = [:]
         var current: (id: String, started: Date)?
         var reported = false
+        var stopped = false
         let launched = Date()
 
         func consume() {
@@ -140,6 +144,7 @@ extension Xcodebuild: BatchingHarness {
                 let limit = running.id == Batch.baseline ? timeouts.baseline : timeouts.mutant
                 if Date().timeIntervalSince(running.started) > limit {
                     Subprocess.stop(process)
+                    stopped = true
                     break
                 }
             } else if !reported, Date().timeIntervalSince(launched) > timeouts.launch {
@@ -160,6 +165,7 @@ extension Xcodebuild: BatchingHarness {
         return Launch(
             verdicts: verdicts,
             unfinished: current.map { ($0.id, Date().timeIntervalSince($0.started)) },
+            stopped: stopped,
             log: log.text
         )
     }

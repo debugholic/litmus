@@ -55,10 +55,16 @@ public enum Verdict: String, Sendable {
     case killed
     /// The suite passed with the change applied. This is a hole.
     case survived
-    /// The suite could not run — most often the mutant did not compile.
+    /// The suite was stopped for running too long with the mutant on — most
+    /// often a loop that no longer ends. Counted as caught: the suite did not
+    /// pass. Shown apart, because a slow test can land here too.
+    case timedOut = "timeout"
+    /// The compiler rejected the mutant, so it was taken out before the run.
     ///
     /// Kept separate on purpose. A compiler rejecting a change is not evidence
     /// that the tests would have caught it, so it must not count as killed.
+    case unviable
+    /// The suite could not run for a reason Litmus could not pin down.
     case error
 }
 
