@@ -153,6 +153,8 @@ struct Run: AsyncParsableCommand {
     /// at — and this runs that instead.
     private func prepared(_ project: URL) throws -> (working: URL, mutants: [Mutant]) {
         if let plan {
+            Interruption.install()
+            try RunLock.acquire(for: project)
             return (project, try Plan.read(contentsOf: URL(fileURLWithPath: plan)))
         }
 
