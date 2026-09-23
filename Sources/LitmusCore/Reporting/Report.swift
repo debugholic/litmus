@@ -4,23 +4,39 @@ import Foundation
 public enum ReportFormat: String, Sendable, CaseIterable {
     case plain
     case json
+    /// Stryker's viewer: every file's source, with each mutant on its line.
     case html
+    /// The Stryker report schema, for tools that read it.
+    case stryker
     /// Emits `warning:` lines Xcode picks up and shows beside the mutated line.
     case xcode
 }
 
 public struct Report: Sendable {
     let summary: MutationRun.Summary
+    /// Where the mutated copy is and where its original is, so the HTML
+    /// report can show the source as written. Without them it reads the
+    /// files where the mutants say they are.
+    let workingCopy: URL?
+    let project: URL?
 
-    public init(_ summary: MutationRun.Summary) {
+    public init(_ summary: MutationRun.Summary, workingCopy: URL? = nil, project: URL? = nil) {
         self.summary = summary
+        self.workingCopy = workingCopy
+        self.project = project
+    }
+
+    private var stryker: StrykerReport {
+        let root = workingCopy ?? URL(fileURLWithPath: "/")
+        return StrykerReport(summary, workingCopy: root, project: project ?? root)
     }
 
     public func rendered(as format: ReportFormat) throws -> String {
         switch format {
         case .plain: return plain()
         case .json: return try json()
-        case .html: return html()
+        case .html: return try stryker.html()
+        case .stryker: return try stryker.json()
         case .xcode: return xcode()
         }
     }
@@ -51,16 +67,42 @@ public struct Report: Sendable {
             }
         }
 
-        let survivors = summary.results.filter { $0.verdict == .survived }
-        guard !survivors.isEmpty else { return lines.joined(separator: "\n") }
+        let gaps = FunctionGap.find(in: summary.results)
+        guard !gaps.isEmpty else { return lines.joined(separator: "\n") }
 
+        let untested = gaps.count { $0.status == .untested }
         lines.append("")
-        lines.append("survived — nothing failed when this changed:")
-        for result in survivors.sorted(by: sortedByLocation) {
-            lines.append("  \(location(of: result))  \(result.mutant.description)")
+        lines.append("what to test — \(untested) untested, \(gaps.count - untested) partly tested:")
+
+        let kindWidth = GapKind.allCases.map(\.rawValue.count).max() ?? 0
+        for gap in gaps {
+            lines.append("")
+            lines.append("\(gap.status.rawValue.padding(toLength: 9, withPad: " ", startingAt: 0))"
+                + "\(gap.name)  \(gap.caught) of \(gap.scored) caught")
+            for survivor in gap.survivors {
+                let mutant = survivor.mutant
+                let kind = survivor.gapKind.rawValue.padding(toLength: kindWidth, withPad: " ", startingAt: 0)
+                lines.append("  \(location(of: survivor))  \(kind)  \(Self.what(mutant))")
+            }
         }
 
         return lines.joined(separator: "\n")
+    }
+
+    /// The change in one line: the code before and after, or what was
+    /// removed. Long code is cut, since the line number finds the rest.
+    static func what(_ mutant: Mutant) -> String {
+        guard let change = mutant.change else { return mutant.description }
+
+        func oneLine(_ code: String) -> String {
+            let flat = code.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            return flat.count > 60 ? String(flat.prefix(59)) + "…" : flat
+        }
+
+        if mutant.operator == "RemoveSideEffects" {
+            return mutant.description
+        }
+        return "`\(oneLine(change.original))` → `\(oneLine(change.replacement))`"
     }
 
     // MARK: - json
@@ -122,51 +164,6 @@ public struct Report: Sendable {
             .joined(separator: "\n")
     }
 
-    // MARK: - html
-
-    private func html() -> String {
-        let rows = summary.results.sorted(by: sortedByLocation).map { result in
-            """
-            <tr class="\(result.verdict.rawValue)">
-              <td>\(escape(result.mutant.fileName))</td>
-              <td class="num">\(result.mutant.line)</td>
-              <td>\(escape(result.mutant.description))</td>
-              <td>\(result.verdict.rawValue)</td>
-            </tr>
-            """
-        }.joined(separator: "\n")
-
-        return """
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-        <meta charset="utf-8">
-        <title>Litmus report</title>
-        <style>
-          :root { color-scheme: light dark; }
-          body { font: 15px -apple-system, system-ui, sans-serif; margin: 3rem auto; max-width: 60rem; padding: 0 1rem; }
-          .score { font-size: 3rem; font-weight: 600; }
-          table { border-collapse: collapse; width: 100%; margin-top: 2rem; }
-          th, td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent); }
-          .num { text-align: right; font-variant-numeric: tabular-nums; }
-          .survived { background: color-mix(in srgb, crimson 12%, transparent); }
-          .error, .unviable { opacity: .55; }
-        </style>
-        </head>
-        <body>
-        <p class="score">\(summary.score.map(percent) ?? "—")</p>
-        <p>\(escape(counts(summary.results).replacingOccurrences(of: " / ", with: " · ")))</p>
-        <table>
-        <thead><tr><th>File</th><th class="num">Line</th><th>Change</th><th>Verdict</th></tr></thead>
-        <tbody>
-        \(rows)
-        </tbody>
-        </table>
-        </body>
-        </html>
-        """
-    }
-
     // MARK: - helpers
 
     /// `killed 3 / survived 1 / error 0`, with timeouts and unviable mutants
@@ -177,6 +174,7 @@ public struct Report: Sendable {
         var parts = ["killed \(count(.killed))", "survived \(count(.survived))"]
         if count(.timedOut) > 0 { parts.append("timeout \(count(.timedOut))") }
         if count(.unviable) > 0 { parts.append("unviable \(count(.unviable))") }
+        if count(.noCoverage) > 0 { parts.append("no coverage \(count(.noCoverage))") }
         parts.append("error \(count(.error))")
         return parts.joined(separator: " / ")
     }
@@ -191,11 +189,5 @@ public struct Report: Sendable {
 
     private func sortedByLocation(_ lhs: MutantResult, _ rhs: MutantResult) -> Bool {
         (lhs.mutant.fileName, lhs.mutant.line) < (rhs.mutant.fileName, rhs.mutant.line)
-    }
-
-    private func escape(_ text: String) -> String {
-        text.replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
     }
 }

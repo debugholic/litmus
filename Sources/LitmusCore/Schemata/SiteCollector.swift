@@ -42,7 +42,8 @@ final class SiteCollector: SyntaxVisitor {
             at: node.operator.startLocation(converter: converter),
             on: SourceSpan(element.sequence),
             description: "changed \(text) to \(replacement)",
-            mutation: .swapOperator(element: element.index, replacement: replacement)
+            mutation: .swapOperator(element: element.index, replacement: replacement),
+            region: element.sequence
         )
 
         return .visitChildren
@@ -63,7 +64,8 @@ final class SiteCollector: SyntaxVisitor {
             at: node.startLocation(converter: converter),
             on: SourceSpan(element.sequence),
             description: "swapped the branches of a ternary",
-            mutation: .swapTernary(element: element.index)
+            mutation: .swapTernary(element: element.index),
+            region: element.sequence
         )
 
         return .visitChildren
@@ -80,7 +82,9 @@ final class SiteCollector: SyntaxVisitor {
             at: node.startLocation(converter: converter),
             on: SourceSpan(node),
             description: "changed \(node.literal.text) to \(flipped)",
-            mutation: .flipBoolean
+            mutation: .flipBoolean,
+            region: node,
+            replacement: flipped
         )
 
         return .skipChildren
@@ -89,7 +93,7 @@ final class SiteCollector: SyntaxVisitor {
     // MARK: - negated conditions
 
     override func visit(_ node: ConditionElementSyntax) -> SyntaxVisitorContinueKind {
-        guard `operator` == .negateCondition, case .expression = node.condition else {
+        guard `operator` == .negateCondition, case let .expression(condition) = node.condition else {
             return .visitChildren
         }
 
@@ -98,7 +102,9 @@ final class SiteCollector: SyntaxVisitor {
             at: node.startLocation(converter: converter),
             on: SourceSpan(node),
             description: "negated the condition",
-            mutation: .negateCondition
+            mutation: .negateCondition,
+            region: condition,
+            replacement: "!(\(condition.trimmedDescription))"
         )
 
         return .visitChildren
@@ -115,8 +121,10 @@ final class SiteCollector: SyntaxVisitor {
             node,
             at: node.startLocation(converter: converter),
             on: SourceSpan(node),
-            description: "removed a call whose result is unused",
-            mutation: .removeStatement
+            description: node.removedCallDescription,
+            mutation: .removeStatement,
+            region: node,
+            replacement: ""
         )
 
         return .visitChildren
@@ -129,9 +137,26 @@ final class SiteCollector: SyntaxVisitor {
         at location: SourceLocation,
         on span: SourceSpan,
         description: String,
-        mutation: MutationSite.Mutation
+        mutation: MutationSite.Mutation,
+        region: some SyntaxProtocol,
+        replacement: String? = nil
     ) {
         let position = SourcePosition(location)
+
+        // The mutated text of a sequence comes from the mutation itself, so
+        // the report shows exactly what the switch turns on.
+        let mutated = replacement
+            ?? region.as(SequenceExprSyntax.self).flatMap { mutation.apply(to: $0)?.trimmedDescription }
+        let start = converter.location(for: region.positionAfterSkippingLeadingTrivia)
+        let end = converter.location(for: region.endPositionBeforeTrailingTrivia)
+        let change = mutated.map {
+            Change(
+                startLine: start.line, startColumn: start.column,
+                endLine: end.line, endColumn: end.column,
+                original: region.trimmedDescription, replacement: $0,
+                function: node.enclosingDeclarationName
+            )
+        }
 
         sites[span, default: []].append(
             MutationSite(
@@ -144,7 +169,8 @@ final class SiteCollector: SyntaxVisitor {
                 operator: `operator`.name,
                 description: description,
                 mutation: mutation,
-                evaluatedOnce: node.isEvaluatedOnce
+                evaluatedOnce: node.isEvaluatedOnce,
+                change: change
             )
         )
     }
@@ -167,6 +193,71 @@ final class SiteCollector: SyntaxVisitor {
         }
 
         return (sequence, index)
+    }
+}
+
+private extension CodeBlockItemSyntax {
+    /// `removed the call to insert(_:at:)`, named the way Swift documentation
+    /// names a function, so the report says what went missing.
+    var removedCallDescription: String {
+        guard case let .expr(expression) = item,
+              let call = expression.as(FunctionCallExprSyntax.self)
+        else { return "removed a call" }
+
+        let base = call.calledExpression.as(MemberAccessExprSyntax.self)?.declName.baseName.text
+            ?? call.calledExpression.as(DeclReferenceExprSyntax.self)?.baseName.text
+        guard let base else { return "removed a call" }
+
+        var labels = call.arguments.map { ($0.label?.text ?? "_") + ":" }
+        if call.trailingClosure != nil { labels.append("_:") }
+        return "removed the call to \(base)(\(labels.joined()))"
+    }
+}
+
+private extension SyntaxProtocol {
+    /// `Type.function(label:)`, `Type.property`, or `Type.init(label:)`,
+    /// for the declaration the node sits in. Closures are looked through:
+    /// a closure's code belongs to the function that wrote it.
+    var enclosingDeclarationName: String? {
+        var member: String?
+        var types: [String] = []
+
+        func labels(_ parameters: FunctionParameterListSyntax) -> String {
+            parameters.map { $0.firstName.text + ":" }.joined()
+        }
+
+        var current = parent
+        while let node = current {
+            if member == nil {
+                if let function = node.as(FunctionDeclSyntax.self) {
+                    member = "\(function.name.text)(\(labels(function.signature.parameterClause.parameters)))"
+                } else if let initializer = node.as(InitializerDeclSyntax.self) {
+                    member = "init(\(labels(initializer.signature.parameterClause.parameters)))"
+                } else if node.is(DeinitializerDeclSyntax.self) {
+                    member = "deinit"
+                } else if let subscriptDecl = node.as(SubscriptDeclSyntax.self) {
+                    member = "subscript(\(labels(subscriptDecl.parameterClause.parameters)))"
+                } else if let variable = node.as(VariableDeclSyntax.self),
+                          variable.isMemberOrGlobal,
+                          let name = variable.bindings.first?.pattern.as(IdentifierPatternSyntax.self)?.identifier.text {
+                    // A local `let` is part of its function, not a name of its own.
+                    member = name
+                }
+            }
+
+            if let type = node.as(ClassDeclSyntax.self) { types.insert(type.name.text, at: 0) }
+            else if let type = node.as(StructDeclSyntax.self) { types.insert(type.name.text, at: 0) }
+            else if let type = node.as(EnumDeclSyntax.self) { types.insert(type.name.text, at: 0) }
+            else if let type = node.as(ActorDeclSyntax.self) { types.insert(type.name.text, at: 0) }
+            else if let type = node.as(ExtensionDeclSyntax.self) {
+                types.insert(type.extendedType.trimmedDescription, at: 0)
+            }
+
+            current = node.parent
+        }
+
+        guard let member else { return types.isEmpty ? nil : types.joined(separator: ".") }
+        return (types + [member]).joined(separator: ".")
     }
 }
 
@@ -248,6 +339,11 @@ private extension VariableDeclSyntax {
     }
 
     /// Declared at file scope.
+    /// A type's property, or a global: something a reader would look up by name.
+    var isMemberOrGlobal: Bool {
+        parent?.is(MemberBlockItemSyntax.self) == true || isGlobal
+    }
+
     var isGlobal: Bool {
         parent?.as(CodeBlockItemSyntax.self)?
             .parent?.as(CodeBlockItemListSyntax.self)?

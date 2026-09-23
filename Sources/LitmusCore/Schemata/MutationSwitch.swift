@@ -138,12 +138,31 @@ enum MutationSwitch {
         "private var \(flagName(id)): Bool { __litmus_on(\"\(id)\") }"
     }
 
+    /// Names a file to note each switch in as it is passed through, while a
+    /// single test runs: which tests reach which mutants.
+    static let probeVariable = "LITMUS_PROBE"
+
     /// The lookup every switch in a file goes through.
     ///
     /// `getenv` rather than `ProcessInfo`: ProcessInfo's copy of the
     /// environment does not see a later `setenv`, and later is the point.
+    ///
+    /// While a probe is on, each switch is written down once per probe file.
+    /// The set keeps a loop from writing the same line a thousand times, and
+    /// the lock keeps a test's background work from racing it.
     static let lookup = """
+    private let __litmus_lock = NSLock()
+    nonisolated(unsafe) private var __litmus_probed: Set<String> = []
     private func __litmus_on(_ id: String) -> Bool {
+        if let probe = getenv("\(probeVariable)") {
+            let path = String(cString: probe)
+            __litmus_lock.lock()
+            if __litmus_probed.insert(path + "\\n" + id).inserted, let file = fopen(path, "a") {
+                fputs(id + "\\n", file)
+                fclose(file)
+            }
+            __litmus_lock.unlock()
+        }
         guard let active = getenv("\(activeVariable)") else { return false }
         return String(cString: active) == id
     }
