@@ -16,12 +16,24 @@ public struct ProjectInjection: Sendable {
         public let unchanged: Int
     }
 
-    /// Directories that never hold code worth mutating, and would make the copy
-    /// enormous. Applied once, when the copy is made.
-    static let skipped: Set<String> = [
-        ".build", ".git", ".swiftpm", "build", "DerivedData",
-        "Pods", "Carthage", "node_modules",
+    /// Directories the build makes for itself, and can make again.
+    static let notCopied: Set<String> = [
+        ".git", "build", "DerivedData", "node_modules",
     ]
+
+    /// Directories that are copied but never mutated.
+    ///
+    /// Dependency stores have to come along — `.build`, `Pods` and `Carthage`
+    /// hold code the build needs and will not fetch again on its own, and
+    /// leaving them out produced "no such module 'Lottie'" on a project whose
+    /// packages live in `Tuist/.build`. None of it is the code under test, so
+    /// none of it is worth changing.
+    ///
+    /// Test code is here for a different reason: mutating it would let the
+    /// suite grade itself.
+    static let notMutated: Set<String> = notCopied.union([
+        ".build", ".swiftpm", "Pods", "Carthage", "Tests", "Test",
+    ])
 
     public let injector: SchemataInjector
     public let include: String?
@@ -111,12 +123,15 @@ public struct ProjectInjection: Sendable {
         try? FileManager.default.removeItem(at: destination)
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
 
-        // rsync keeps this quick and lets the skip list stay in one place;
-        // FileManager would copy the build directories first and prune after.
+        // rsync keeps the skip list in one place, and `--link-dest` makes every
+        // unchanged file a clone rather than a second copy of the bytes: on
+        // APFS that is instant and free, and a write to the copy still leaves
+        // the original alone. It only applies within one volume, which is why
+        // the working copy is put beside the project.
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/rsync")
-        process.arguments = ["-a"]
-            + Self.skipped.sorted().flatMap { ["--exclude", $0] }
+        process.arguments = ["-a", "--link-dest=\(project.path)"]
+            + Self.notCopied.sorted().flatMap { ["--exclude", $0] }
             + ["\(project.path)/", "\(destination.path)/"]
 
         try process.run()
@@ -131,13 +146,8 @@ public struct ProjectInjection: Sendable {
 
         var files: [URL] = []
 
-        // Nothing here re-checks the skip list: rsync already left those
-        // directories out of the copy, so this walk cannot reach one. A
-        // mutation run found the check — deleting it broke no test.
         for case let url as URL in walker {
-            // Test code is the thing being measured, so mutating it would make
-            // the suite grade itself.
-            if url.lastPathComponent == "Tests" || url.lastPathComponent == "Test" {
+            if Self.notMutated.contains(url.lastPathComponent) {
                 walker.skipDescendants()
                 continue
             }

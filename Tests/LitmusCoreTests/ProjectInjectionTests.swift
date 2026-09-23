@@ -132,15 +132,33 @@ struct ProjectInjectionTests {
         #expect(result.mutants.allSatisfy { $0.filePath.hasSuffix("/A.swift") })
     }
 
-    @Test("does not walk into a build directory")
-    func skipsBuildDirectories() throws {
-        let (result, _) = try inject([
+    /// Dependencies are copied, because the build needs them, and left alone,
+    /// because they are not the code under test.
+    @Test("copies a dependency store without mutating it")
+    func copiesButSkipsDependencies() throws {
+        let (result, copy) = try inject([
             "Sources/A.swift": Self.mutable,
             ".build/checkouts/Other/B.swift": Self.mutable,
             "Pods/C.swift": Self.mutable,
         ])
 
         #expect(result.mutants.allSatisfy { $0.filePath.contains("/Sources/") })
+        #expect(copy.read(".build/checkouts/Other/B.swift") == Self.mutable)
+        #expect(copy.read("Pods/C.swift") == Self.mutable)
+    }
+
+    /// Build output is regenerable, so it is not copied at all.
+    @Test("leaves build output out of the copy")
+    func skipsBuildOutput() throws {
+        let (result, copy) = try inject([
+            "Sources/A.swift": Self.mutable,
+            "build/Stale.swift": Self.mutable,
+            "DerivedData/Old.swift": Self.mutable,
+        ])
+
+        #expect(result.mutants.allSatisfy { $0.filePath.contains("/Sources/") })
+        #expect(copy.read("build/Stale.swift") == nil)
+        #expect(copy.read("DerivedData/Old.swift") == nil)
     }
 
     // MARK: - bookkeeping

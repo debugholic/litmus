@@ -116,8 +116,11 @@ struct Run: AsyncParsableCommand {
             return (project, try Plan.read(contentsOf: URL(fileURLWithPath: plan)))
         }
 
-        let workingCopy = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("litmus-\(project.lastPathComponent)")
+        // Beside the project, not in /tmp: the two are usually on different
+        // volumes, and a copy that crosses one cannot share bytes with the
+        // original. A dependency store can be gigabytes.
+        let workingCopy = project.deletingLastPathComponent()
+            .appendingPathComponent(".litmus-\(project.lastPathComponent)")
 
         let result = try Injection(
             project: project,
