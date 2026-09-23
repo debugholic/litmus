@@ -156,19 +156,44 @@ struct ProjectInjectionTests {
         #expect(result.mutants.allSatisfy { $0.filePath.hasSuffix("/A.swift") })
     }
 
-    /// Dependencies are copied, because the build needs them, and left alone,
-    /// because they are not the code under test.
-    @Test("copies a dependency store without mutating it")
-    func copiesButSkipsDependencies() throws {
-        let (result, copy) = try inject([
+    /// Dependency stores are linked to the original, because the build needs
+    /// them and generated module maps name them by absolute path: a copy of
+    /// its own made clang see every module twice. They are never mutated.
+    @Test("links dependency stores to the original without mutating them")
+    func linksDependencies() throws {
+        let source = try Sandbox([
             "Sources/A.swift": Self.mutable,
-            ".build/checkouts/Other/B.swift": Self.mutable,
-            "Pods/C.swift": Self.mutable,
+            "Tuist/.build/checkouts/Other/B.swift": Self.mutable,
+            "Pods/Lib/C.swift": Self.mutable,
         ])
+        let destination = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("litmus-copy-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: destination) }
+
+        let result = try ProjectInjection()(project: source.root, workingCopy: destination)
 
         #expect(result.mutants.allSatisfy { $0.filePath.contains("/Sources/") })
-        #expect(copy.read(".build/checkouts/Other/B.swift") == Self.mutable)
-        #expect(copy.read("Pods/C.swift") == Self.mutable)
+
+        for linked in ["Tuist/.build", "Pods"] {
+            let target = try FileManager.default.destinationOfSymbolicLink(
+                atPath: destination.appendingPathComponent(linked).path
+            )
+            #expect(target == source.root.appendingPathComponent(linked).path)
+        }
+
+        #expect(source.read("Tuist/.build/checkouts/Other/B.swift") == Self.mutable)
+    }
+
+    /// SwiftPM builds into the package's own `.build`. Linking that one would
+    /// build mutants into the user's, so it is left for the copy to remake.
+    @Test("leaves a package's own build directory out")
+    func skipsRootBuildDirectory() throws {
+        let (_, copy) = try inject([
+            "Sources/A.swift": Self.mutable,
+            ".build/debug/Stale.swift": Self.mutable,
+        ])
+
+        #expect(copy.read(".build/debug/Stale.swift") == nil)
     }
 
     /// Build output is regenerable, so it is not copied at all.

@@ -21,18 +21,26 @@ public struct ProjectInjection: Sendable {
         ".git", "build", "DerivedData", "node_modules",
     ]
 
-    /// Directories that are copied but never mutated.
+    /// Dependency stores, linked to the original rather than copied.
     ///
-    /// Dependency stores have to come along — `.build`, `Pods` and `Carthage`
-    /// hold code the build needs and will not fetch again on its own, and
-    /// leaving them out produced "no such module 'Lottie'" on a project whose
-    /// packages live in `Tuist/.build`. None of it is the code under test, so
-    /// none of it is worth changing.
+    /// The build needs them and will not fetch them again on its own: left
+    /// out, a Tuist project failed with "no such module 'Lottie'". Copied, it
+    /// failed differently — Tuist writes the stores' absolute paths into the
+    /// module maps it generates, so the copy saw two `Tuist/.build`s, its own
+    /// through relative paths and the original through absolute ones, and
+    /// clang found FBLPromises defined twice. A link makes both routes arrive
+    /// at the same file.
     ///
-    /// Test code is here for a different reason: mutating it would let the
-    /// suite grade itself.
-    static let notMutated: Set<String> = notCopied.union([
-        ".build", ".swiftpm", "Pods", "Carthage", "Tests", "Test",
+    /// The build reads these and does not write to them, the same as when it
+    /// runs in the original.
+    static let linked: Set<String> = [".build", "Pods", "Carthage"]
+
+    /// Directories that are copied or linked but never mutated.
+    ///
+    /// None of the dependency code is the code under test. Test code is here
+    /// for a different reason: mutating it would let the suite grade itself.
+    static let notMutated: Set<String> = notCopied.union(linked).union([
+        ".swiftpm", "Tests", "Test",
     ])
 
     public let injector: SchemataInjector
@@ -119,55 +127,44 @@ public struct ProjectInjection: Sendable {
         )
     }
 
-    /// Clones the project, then prunes what the build can make again.
+    /// Clones the project, leaving out what the build makes and linking what
+    /// it depends on.
     ///
-    /// A clone rather than hardlinks. `rsync --link-dest` made every unchanged
-    /// file in the copy the same inode as the original, so anything that
-    /// wrote to one in place wrote to the other: a test driver appended to a
-    /// test file in the copy landed in the user's project. A clone shares
-    /// bytes until one side is written, then splits, which keeps the copy
-    /// free and the original untouched. Across volumes `cp -c` falls back to
-    /// an ordinary copy by itself.
+    /// Cloned rather than hardlinked. `rsync --link-dest` made every
+    /// unchanged file in the copy the same inode as the original, so a test
+    /// driver appended to a test file in the copy landed in the user's
+    /// project. `copyItem` clones on APFS: bytes are shared until one side is
+    /// written, then split. Across volumes it copies instead.
     private func copy(_ project: URL, to destination: URL) throws {
         try? FileManager.default.removeItem(at: destination)
-        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
-
-        let entries = try FileManager.default.contentsOfDirectory(atPath: project.path)
-            .filter { !Self.notCopied.contains($0) }
-
-        for entry in entries {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/bin/cp")
-            process.arguments = [
-                "-c", "-R", "-p",
-                project.appendingPathComponent(entry).path,
-                destination.appendingPathComponent(entry).path,
-            ]
-            try process.run()
-            process.waitUntilExit()
-
-            guard process.terminationStatus == 0 else {
-                throw CopyFailure(description: "could not copy \(entry) into the working copy")
-            }
-        }
-
-        try prune(destination)
+        try clone(project, to: destination, depth: 0)
     }
 
-    /// Removes regenerable directories below the top level, such as an
-    /// example app's node_modules.
-    private func prune(_ root: URL) throws {
-        guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)
-        else { return }
+    private func clone(_ source: URL, to destination: URL, depth: Int) throws {
+        let manager = FileManager.default
+        try manager.createDirectory(at: destination, withIntermediateDirectories: true)
 
-        var doomed: [URL] = []
-        for case let url as URL in walker where Self.notCopied.contains(url.lastPathComponent) {
-            doomed.append(url)
-            walker.skipDescendants()
-        }
+        for name in try manager.contentsOfDirectory(atPath: source.path) {
+            let from = source.appendingPathComponent(name)
+            let to = destination.appendingPathComponent(name)
 
-        for url in doomed {
-            try FileManager.default.removeItem(at: url)
+            if Self.notCopied.contains(name) { continue }
+
+            // SwiftPM's own build directory: `swift build` writes its products
+            // here, and linking it would build mutants into the user's.
+            if depth == 0, name == ".build" { continue }
+
+            let values = try from.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            let isDirectory = values.isDirectory == true && values.isSymbolicLink != true
+
+            if isDirectory, Self.linked.contains(name) {
+                try manager.createSymbolicLink(at: to, withDestinationURL: from)
+            } else if isDirectory {
+                try clone(from, to: to, depth: depth + 1)
+            } else {
+                // A symlink is copied as the link, a file as a clone.
+                try manager.copyItem(at: from, to: to)
+            }
         }
     }
 
