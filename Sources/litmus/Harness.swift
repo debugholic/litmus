@@ -134,9 +134,12 @@ struct ScopeOptions: ParsableArguments {
 
     @Flag(
         inversion: .prefixedNo,
-        help: "Skip mutants no test reaches. They survive whatever the code does."
+        help: """
+        Measure coverage first, to skip mutants no test reaches. By default only \
+        when a test is XCTest; Swift Testing is probed in process instead.
+        """
     )
-    var coverage = true
+    var coverage: Bool?
 
     /// The ref to diff against, or nil to take the whole tree.
     ///
