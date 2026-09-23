@@ -128,6 +128,14 @@ struct Injection {
                 heartbeat.end()
                 print("  leaving out \(dropped.joined(separator: ", ")) — it does not build, or its own tests fail")
                 heartbeat.begin()
+
+                // Everything built and ran; only tests failed. What ran was
+                // measured, and running it all again would measure it again.
+                let built = AllTestsScheme.failures(in: failure.log).projects.isEmpty
+                if built, !failedBundles.isEmpty, let xcodebuild = harness as? Xcodebuild,
+                   let measured = try? xcodebuild.lastCoverage(), !measured.isEmpty {
+                    return measured
+                }
             }
         }
 
