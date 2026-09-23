@@ -179,6 +179,11 @@ public struct Xcodebuild: Sendable, TestHarness {
         return try Self.parse(report)
     }
 
+    public func testedScope(_ built: BuiltTests) -> TestedScope? {
+        guard let xctestrun = built.artifact else { return nil }
+        return TestedScope.from(xctestrun: xctestrun, derivedData: derivedDataPath)
+    }
+
     /// A destination as a folder name.
     static func folderName(for destination: String) -> String {
         String(destination.map { $0.isLetter || $0.isNumber || $0 == "-" ? $0 : "_" })

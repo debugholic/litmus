@@ -49,4 +49,12 @@ public protocol TestHarness: Sendable {
     /// positions in a plan are positions in the original file, and injection
     /// moves every line below it.
     func coverage(lane: String) throws -> Coverage
+
+    /// The source files the built tests are aimed at, or nil when the harness
+    /// cannot tell. Mutants outside it are not run.
+    func testedScope(_ built: BuiltTests) -> TestedScope?
+}
+
+extension TestHarness {
+    public func testedScope(_ built: BuiltTests) -> TestedScope? { nil }
 }

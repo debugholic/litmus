@@ -61,6 +61,9 @@ public struct MutationRun: Sendable {
     /// minutes says so before it starts.
     public enum Step: Sendable {
         case building
+        /// The build said which modules the tests are aimed at, and mutants
+        /// outside them were left out.
+        case scoped(modules: [String], kept: Int, dropped: Int)
         case checkingBaseline
         case baselinePassed(TimeInterval)
         case started(Mutant)
@@ -84,6 +87,19 @@ public struct MutationRun: Sendable {
 
         progress(.building)
         let built = try harness.build(lane: configuration.lanes[0])
+
+        // A mutant in code these tests never look at survives whatever it
+        // does, and each one costs a full run to prove it.
+        var mutants = mutants
+        if let scope = harness.testedScope(built) {
+            let kept = mutants.filter { scope.contains($0.filePath) }
+            progress(.scoped(modules: scope.modules, kept: kept.count, dropped: mutants.count - kept.count))
+            mutants = kept
+        }
+
+        guard !mutants.isEmpty else {
+            return Summary(results: [], duration: Date().timeIntervalSince(started))
+        }
 
         // Every mutant is compiled in but switched off here, so this is the
         // project's own suite. Measuring against a red baseline would report

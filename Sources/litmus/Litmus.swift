@@ -152,6 +152,16 @@ struct Run: AsyncParsableCommand {
             print("  building once, with every mutant switched off…")
             heartbeat.begin()
 
+        case let .scoped(modules, kept, dropped):
+            heartbeat.end()
+            print("  these tests are aimed at \(modules.joined(separator: ", "))")
+            if dropped > 0 {
+                print("  skipping \(dropped) mutant(s) in code they do not test — \(kept) left")
+            }
+            if kept == 0 {
+                print("  nothing left to run: none of the mutants are in code these tests are aimed at")
+            }
+
         case .checkingBaseline:
             heartbeat.end()
             print("  running the suite untouched, to check it passes…")
