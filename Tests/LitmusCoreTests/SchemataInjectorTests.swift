@@ -37,7 +37,7 @@ struct SchemataInjectorTests {
         }
         """)
 
-        #expect(result.source.contains("ProcessInfo.processInfo.environment"))
+        #expect(result.source.contains("getenv(\"LITMUS_ACTIVE\")"))
         #expect(result.source.contains(result.mutants[0].switchName))
         // The original has to survive as the else branch.
         #expect(result.source.contains("a && b"))

@@ -135,7 +135,7 @@ public struct Xcodebuild: Sendable, TestHarness {
 
         var environment: [String: String] = [:]
         if let mutantSwitch {
-            environment["TEST_RUNNER_\(mutantSwitch)"] = "YES"
+            environment["TEST_RUNNER_\(MutationSwitch.activeVariable)"] = mutantSwitch
         }
 
         let (log, status) = try run(arguments: arguments, environment: environment)

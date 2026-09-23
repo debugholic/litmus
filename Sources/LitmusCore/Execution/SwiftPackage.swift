@@ -51,7 +51,7 @@ public struct SwiftPackage: Sendable, TestHarness {
         // straight onto it. There is no runner in between to strip a
         // `TEST_RUNNER_` prefix, as there is on a simulator.
         if let mutantSwitch {
-            environment[mutantSwitch] = "YES"
+            environment[MutationSwitch.activeVariable] = mutantSwitch
         }
 
         let (log, status) = try run(

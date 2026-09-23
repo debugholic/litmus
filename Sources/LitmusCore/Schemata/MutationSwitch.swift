@@ -86,14 +86,32 @@ enum MutationSwitch {
             .with(\.trailingTrivia, base.trailingTrivia)
     }
 
-    /// `private let <flag> = ProcessInfo.processInfo.environment["<id>"] != nil`
+    /// The variable that names the mutant switched on.
     ///
-    /// Read once rather than per evaluation: a Swift global `let` is lazy and
-    /// runs its initialiser a single time, where an inline lookup would rebuild
-    /// the environment dictionary on every pass through a loop.
+    /// One variable holding a name, rather than one variable per mutant, so a
+    /// process can move from one mutant to the next by setting it again.
+    static let activeVariable = "LITMUS_ACTIVE"
+
+    /// `private var <flag>: Bool { __litmus_on("<id>") }`
+    ///
+    /// Read each time it is evaluated, not once at launch. A launch is most of
+    /// what a mutant costs on a simulator — installing the app and starting
+    /// the runner came to 85 of 115 seconds — so the tests now run many
+    /// mutants in one process, switching between them as they go.
     static func declaration(id: String) -> String {
-        "private let \(flagName(id)) = ProcessInfo.processInfo.environment[\"\(id)\"] != nil"
+        "private var \(flagName(id)): Bool { __litmus_on(\"\(id)\") }"
     }
+
+    /// The lookup every switch in a file goes through.
+    ///
+    /// `getenv` rather than `ProcessInfo`: ProcessInfo's copy of the
+    /// environment does not see a later `setenv`, and later is the point.
+    static let lookup = """
+    private func __litmus_on(_ id: String) -> Bool {
+        guard let active = getenv("\(activeVariable)") else { return false }
+        return String(cString: active) == id
+    }
+    """
 
     /// The identifier standing in for a mutant's environment variable.
     ///

@@ -88,7 +88,7 @@ public struct SchemataInjector: Sendable {
     private func flagged(_ source: String, for sites: [MutationSite]) -> String {
         var result = source
 
-        // `ProcessInfo` comes from Foundation, and not every file imports it.
+        // `getenv` comes through Foundation, and not every file imports it.
         // Re-importing a module that is already imported is harmless.
         if !result.contains("import Foundation") {
             result = "import Foundation\n" + result
@@ -100,9 +100,9 @@ public struct SchemataInjector: Sendable {
 
         return result + """
 
-        // Litmus mutation switches. Each is read once per process, so a mutant
-        // costs a boolean test where it is used rather than an environment
-        // lookup.
+        // Litmus mutation switches. Each reads the active mutant when it is
+        // evaluated, so one process can run many mutants in turn.
+        \(MutationSwitch.lookup)
         \(declarations)
 
         """

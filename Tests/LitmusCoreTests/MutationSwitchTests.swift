@@ -25,14 +25,23 @@ struct MutationSwitchTests {
         #expect(MutationSwitch.flagName("a+b-c.d") == "__litmus_a_b_c_d")
     }
 
-    /// The declaration and the source that reads it have to agree exactly: the
-    /// identifier is sanitised, the environment key is not.
-    @Test("declares the flag under the sanitised name and reads the raw key")
+    /// The declaration and the runner have to agree exactly: the identifier
+    /// is sanitised, the name it compares against is not.
+    @Test("declares the flag under the sanitised name and compares the raw id")
     func declaration() {
         let declaration = MutationSwitch.declaration(id: "A+B_ChangeLogicalConnector_1_2_3")
 
-        #expect(declaration == "private let __litmus_A_B_ChangeLogicalConnector_1_2_3 = "
-            + "ProcessInfo.processInfo.environment[\"A+B_ChangeLogicalConnector_1_2_3\"] != nil")
+        #expect(declaration == "private var __litmus_A_B_ChangeLogicalConnector_1_2_3: Bool "
+            + "{ __litmus_on(\"A+B_ChangeLogicalConnector_1_2_3\") }")
+    }
+
+    /// Read when evaluated, so a process can switch mutants between runs.
+    /// ProcessInfo keeps its own copy of the environment and would never see
+    /// the change.
+    @Test("looks the active mutant up through getenv")
+    func lookup() {
+        #expect(MutationSwitch.lookup.contains("getenv(\"LITMUS_ACTIVE\")"))
+        #expect(!MutationSwitch.lookup.contains("ProcessInfo"))
     }
 }
 

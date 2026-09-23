@@ -24,7 +24,8 @@ struct HarnessTests {
             let script = """
             #!/bin/sh
             echo "ARGS: $@"
-            echo "SWITCHES: $(env | grep -c '^LITMUS_PROBE_')"
+            echo "ACTIVE: ${LITMUS_ACTIVE:-none}"
+            echo "RUNNER_ACTIVE: ${TEST_RUNNER_LITMUS_ACTIVE:-none}"
             cat <<'BODY'
             \(body)
             BODY
@@ -71,10 +72,11 @@ struct HarnessTests {
         let output = try package.test(
             BuiltTests(),
             lane: "worker 1",
-            switchOn: "LITMUS_PROBE_Sample_ChangeLogicalConnector_1_2_3"
+            switchOn: "Sample_ChangeLogicalConnector_1_2_3"
         )
 
-        #expect(output.log.contains("SWITCHES: 1"))
+        #expect(output.log.contains("ACTIVE: Sample_ChangeLogicalConnector_1_2_3"))
+        #expect(output.log.contains("RUNNER_ACTIVE: none"))
     }
 
     @Test("sets no variable for the baseline")
@@ -84,7 +86,7 @@ struct HarnessTests {
 
         let output = try package.test(BuiltTests(), lane: "worker 1", switchOn: nil)
 
-        #expect(output.log.contains("SWITCHES: 0"))
+        #expect(output.log.contains("ACTIVE: none"))
     }
 
     @Test("carries a bad exit status back rather than swallowing it")
@@ -135,12 +137,13 @@ struct HarnessTests {
         let output = try xcodebuild.testWithoutBuilding(
             xctestrun: URL(fileURLWithPath: "/tmp/App.xctestrun"),
             destination: "platform=iOS Simulator,id=UDID",
-            switchOn: "LITMUS_PROBE_Sample_ChangeLogicalConnector_1_2_3"
+            switchOn: "Sample_ChangeLogicalConnector_1_2_3"
         )
 
-        // The script counts variables named LITMUS_PROBE_*, so a prefixed one
-        // does not match: seeing zero is what proves the prefix was added.
-        #expect(output.log.contains("SWITCHES: 0"))
+        // The fake stands in for xcodebuild, so it sees the variable before
+        // xcodebuild strips the prefix: prefixed, and not the bare name.
+        #expect(output.log.contains("RUNNER_ACTIVE: Sample_ChangeLogicalConnector_1_2_3"))
+        #expect(output.log.contains("ACTIVE: none"))
     }
 
     @Test("runs the built tests against the xctestrun it was given")
