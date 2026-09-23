@@ -116,12 +116,12 @@ public struct StrykerReport: Sendable {
 
         if let replacement = change?.replacement { entry["replacement"] = replacement }
 
-        var description = "[\(mutant.gapKind.rawValue)] \(mutant.description)"
+        var description = "[\(result.gapKind.rawValue)] \(mutant.description)"
         if let gap {
             description += " — \(gap.status.rawValue) \(gap.name), \(gap.caught) of \(gap.scored) caught"
         }
         entry["description"] = description
-        if result.verdict == .survived { entry["statusReason"] = mutant.gapKind.hint }
+        if result.verdict == .survived || result.verdict == .noCoverage { entry["statusReason"] = result.gapKind.hint }
 
         return entry
     }
@@ -147,6 +147,7 @@ public struct StrykerReport: Sendable {
         case .survived: return "Survived"
         case .timedOut: return "Timeout"
         case .unviable: return "CompileError"
+        case .noCoverage: return "NoCoverage"
         case .error: return "RuntimeError"
         }
     }

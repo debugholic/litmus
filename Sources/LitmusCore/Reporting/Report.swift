@@ -81,7 +81,7 @@ public struct Report: Sendable {
                 + "\(gap.name)  \(gap.caught) of \(gap.scored) caught")
             for survivor in gap.survivors {
                 let mutant = survivor.mutant
-                let kind = mutant.gapKind.rawValue.padding(toLength: kindWidth, withPad: " ", startingAt: 0)
+                let kind = survivor.gapKind.rawValue.padding(toLength: kindWidth, withPad: " ", startingAt: 0)
                 lines.append("  \(location(of: survivor))  \(kind)  \(Self.what(mutant))")
             }
         }
@@ -174,6 +174,7 @@ public struct Report: Sendable {
         var parts = ["killed \(count(.killed))", "survived \(count(.survived))"]
         if count(.timedOut) > 0 { parts.append("timeout \(count(.timedOut))") }
         if count(.unviable) > 0 { parts.append("unviable \(count(.unviable))") }
+        if count(.noCoverage) > 0 { parts.append("no coverage \(count(.noCoverage))") }
         parts.append("error \(count(.error))")
         return parts.joined(separator: " / ")
     }

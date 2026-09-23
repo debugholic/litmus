@@ -58,6 +58,7 @@ public struct MutationRun: Sendable {
         public var survived: Int { results.count { $0.verdict == .survived } }
         public var timedOut: Int { results.count { $0.verdict == .timedOut } }
         public var unviable: Int { results.count { $0.verdict == .unviable } }
+        public var noCoverage: Int { results.count { $0.verdict == .noCoverage } }
         public var errored: Int { results.count { $0.verdict == .error } }
 
         /// Caught over everything that actually produced a verdict.
@@ -141,6 +142,10 @@ public struct MutationRun: Sendable {
         case targetSkipped(String, reason: String)
         case checkingBaseline
         case baselinePassed(TimeInterval)
+        /// Running each test alone to see which mutants it reaches.
+        case probing
+        /// Done: mutants now run only the tests that reach them.
+        case probed(TimeInterval)
         /// The batch is done; these mutants sit in values Swift computes once,
         /// and each now runs in a process of its own.
         case evaluatedOnce(Int)
@@ -341,7 +346,7 @@ public struct MutationRun: Sendable {
             switch verdict {
             case .killed, .timedOut: return 2
             case .survived: return 1
-            case .unviable, .error: return 0
+            case .noCoverage, .unviable, .error: return 0
             }
         }
         guard let old else { return true }
@@ -403,6 +408,10 @@ public struct MutationRun: Sendable {
                         switch event {
                         case .started(Batch.baseline):
                             break
+                        case .started(Batch.probe):
+                            progress(.probing)
+                        case let .finished(Batch.probe, _, duration):
+                            progress(.probed(duration))
                         case let .finished(Batch.baseline, verdict, duration):
                             if verdict == .survived { progress(.baselinePassed(duration)) }
                         case let .started(id):
