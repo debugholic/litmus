@@ -38,13 +38,13 @@ $ litmus
 ```
 
 In a project directory, that is the whole command. Litmus works out the rest:
-whether the tests need a simulator, which scheme to build, which simulator to
+whether the tests need a simulator, which tests there are, which simulator to
 use, and what this branch changed.
 
 ```
 changes since origin/develop
+  every unit test in the project, through a scheme of litmus's own
 measuring coverage…
-  scheme MyApp
 
 16 mutants across 2 file(s), skipping 1391 outside the change and 85 unreachable
   checking the baseline first…
@@ -56,10 +56,24 @@ Litmus score 50%
 killed 1 / survived 1 / error 0
 ```
 
-Where a guess would be wrong, pass it: `--scheme`, `--harness xcode|swiftpm`,
-`--simulators <UDID>…`, `--destination`. Where the project is ambiguous —
-several schemes, say — Litmus stops and lists them rather than picking one,
-because the wrong choice takes hours to disprove.
+Where a guess would be wrong, pass it: `--harness xcode|swiftpm`,
+`--simulators <UDID>…`, `--destination`.
+
+### Every test, not a scheme's
+
+An Xcode project runs every unit test it has. A project's schemes are for
+building its apps, and the tests they run are whatever someone remembered to
+tick: on one Tuist project the shared schemes ran 15 of 70 test targets, and
+the Domain, Data and Core tests were in none. So Litmus reads each project in
+the workspace for its unit test targets and writes a scheme naming all of
+them — into its working copy, never into your project. UI tests are left out;
+they drive the app from outside and cannot see a mutant's module.
+
+A target whose own tests do not build, or fail with no mutant on, is left out
+and the rest run: one broken target in seventy should not stop the other
+sixty-nine. Litmus says which it left out.
+
+`--scheme <name>` runs only that scheme's tests instead.
 
 `--workers N` runs N mutants at once, each on its own simulator. It defaults to
 one: a simulator is not cheap, and past a point they contend for the machine
@@ -115,12 +129,14 @@ base, and reaches the working tree so uncommitted work counts. On the default
 branch, or outside a repository with a remote, there is nothing to compare
 against and the whole tree is the honest scope.
 
-**What the tests are aimed at.** A scheme's tests build a test target, and
-that target names the modules it tests — by name, `FeatureSettingTests` for
-`FeatureSetting`, and by `@testable import`. On one Tuist project a scheme
-whose seven tests cover one feature reached over 1,200 files; it is mutated in that
-feature's two, because the rest would survive whatever they said. This one is
-not a switch; it is what the scheme means.
+**What the tests are aimed at.** Each test target names the modules it tests
+— by name, `FeatureSettingTests` for `FeatureSetting`, and by `@testable
+import`. A mutant runs only against the test targets aimed at its module. On
+one Tuist project a feature's seven tests reached over 1,200 files through
+the app that hosts them; they are run against that feature's two, because the
+rest would survive whatever they said. A mutant several targets test goes to
+the next one only if the last did not catch it. This one is not a switch; it
+is what the tests mean.
 
 **What no test reaches.** A mutant on a line no test runs cannot be killed. It
 will survive whatever the code says, and the only thing running it buys is the
@@ -225,10 +241,10 @@ several simulators at once without stepping on each other.
 ### Many mutants in one process
 
 On a simulator, launching is most of what a mutant costs: installing the app
-and starting the runner took 85 of every 115 seconds. So when a scheme's
-tests are all Swift Testing, in one test bundle, Litmus adds a small driver to
-the working copy's tests. It is launched once, and switches from one mutant to
-the next, running the suite again each time. On one project 34 mutants took 99
+and starting the runner took 85 of every 115 seconds. So for each test target
+whose tests are all Swift Testing, Litmus adds a small driver to the working
+copy's tests. It is launched once per target, and switches from one mutant to
+the next, running that target's tests again each time. On one project 34 mutants took 99
 seconds this way against 65 minutes one launch at a time, and every verdict
 checked against a fresh process agreed.
 
@@ -238,8 +254,9 @@ as a timeout.
 
 Two kinds of mutant still get a process of their own:
 
-- **XCTest cases, or a second test bundle.** The driver cannot rerun either,
-  so a scheme that has them runs every mutant in a fresh process.
+- **XCTest cases.** The driver cannot rerun them, so a target that has any
+  runs each of its mutants in a fresh process, narrowed to that target with
+  `-only-testing`.
 - **Values Swift computes once.** A global's or a static property's initial
   value is kept from the first time it is read, with whichever mutant was on
   then. Those mutants run after the batch, one launch each.
@@ -252,8 +269,16 @@ Two kinds of mutant still get a process of their own:
 |---|---|
 | `ChangeLogicalConnector` | `&&` ↔ `\|\|` |
 | `RelationalOperatorReplacement` | `==` ↔ `!=`, `<` ↔ `>=`, `<=` ↔ `>` |
+| `ChangeArithmeticOperator` | `+` ↔ `-`, `*` ↔ `/`, `%` → `*` |
 | `SwapTernary` | `a ? b : c` → `a ? c : b` |
+| `FlipBooleanLiteral` | `true` ↔ `false` |
+| `NegateCondition` | `if x` → `if !x`, and the same for `guard` and `while` |
 | `RemoveSideEffects` | drops a call whose result is unused |
+
+`ChangeArithmeticOperator` leaves `+` alone beside a string, array or
+dictionary literal, where it joins rather than adds. `FlipBooleanLiteral`
+leaves alone literals the compiler reads: `#if`, attributes, raw values,
+default arguments and patterns.
 
 `RemoveSideEffects` leaves alone anything that would stop the file compiling:
 an initializer's `super.init`, a call that never returns, and a block whose
