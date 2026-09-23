@@ -256,7 +256,14 @@ struct Run: AsyncParsableCommand {
 
         case let .baselinePassed(duration):
             heartbeat.end(keep: false)
-            print("  baseline passed in \(time(duration))\n")
+            print("  baseline passed in \(time(duration))")
+
+        case .probing:
+            heartbeat.begin("  running each test alone, to see which mutants it reaches…")
+
+        case let .probed(duration):
+            heartbeat.end(keep: false)
+            print("  probed in \(time(duration)) — each mutant now runs only the tests that reach it\n")
 
         case let .evaluatedOnce(count):
             print("\n  \(count) mutant(s) in a global or static value, each in a process of its own:")
@@ -273,6 +280,7 @@ struct Run: AsyncParsableCommand {
             case .survived: mark = "✘ survived".red
             case .timedOut: mark = "✔ timeout ".green
             case .unviable: mark = "– unviable".yellow
+            case .noCoverage: mark = "– no test ".yellow
             case .error: mark = "– error   ".yellow
             }
 

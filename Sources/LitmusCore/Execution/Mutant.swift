@@ -99,6 +99,9 @@ public enum Verdict: String, Sendable {
     /// Kept separate on purpose. A compiler rejecting a change is not evidence
     /// that the tests would have caught it, so it must not count as killed.
     case unviable
+    /// No test passes through the mutated code, so none was run: it would
+    /// survive whatever it did. Left out of the score, like unreached code.
+    case noCoverage = "nocoverage"
     /// The suite could not run for a reason Litmus could not pin down.
     case error
 }

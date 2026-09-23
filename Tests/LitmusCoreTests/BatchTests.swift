@@ -15,8 +15,9 @@ import Testing
 struct BatchTests {
     /// Behaves by the name of each id:
     /// `crash…` exits mid-run, `hang…` never finishes, `killed…` fails, and
-    /// anything else passes. A batch that mentions `redbaseline` fails the
-    /// baseline.
+    /// `uncovered…` is reached by no test, and anything else passes. A batch
+    /// that mentions `redbaseline` fails the baseline; one that mentions
+    /// `dyingprobe` dies while probing, if it is asked to probe.
     private final class FakeRunner {
         let directory: URL
         var path: String { directory.appendingPathComponent("xcodebuild").path }
@@ -34,11 +35,18 @@ struct BatchTests {
                 ? "sleep 100"
                 : """
                 red=0; grep -q redbaseline "$batch" && red=1
+                echo "${TEST_RUNNER_LITMUS_PROBE_DIR:-none}" >> "\(directory.path)/probes"
                 while IFS= read -r id || [ -n "$id" ]; do
                   echo "START $id" >> "$out"
                   case "$id" in
                     -) if [ $red = 1 ]; then echo "END - killed 0.1" >> "$out"; exit 0; fi
-                       echo "END - survived 0.1" >> "$out" ;;
+                       echo "END - survived 0.1" >> "$out"
+                       if [ -n "$TEST_RUNNER_LITMUS_PROBE_DIR" ]; then
+                         echo "START ~probe" >> "$out"
+                         grep -q dyingprobe "$batch" && exit 1
+                         echo "END ~probe survived 0.1" >> "$out"
+                       fi ;;
+                    uncovered*) echo "END $id nocoverage 0" >> "$out" ;;
                     crash*) exit 1 ;;
                     hang*) sleep 100 ;;
                     killed*) echo "END $id killed 0.1" >> "$out" ;;
@@ -57,6 +65,12 @@ struct BatchTests {
             """
             try script.write(toFile: path, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
+        }
+
+        /// The probe folder each launch was given, or "none".
+        var probes: [String] {
+            (try? String(contentsOf: directory.appendingPathComponent("probes"), encoding: .utf8))?
+                .split(separator: "\n").map(String.init) ?? []
         }
 
         deinit { try? FileManager.default.removeItem(at: directory) }
@@ -223,5 +237,48 @@ struct BatchTests {
 
         let text = try String(contentsOf: file, encoding: .utf8)
         #expect(text.components(separatedBy: "final class \(Batch.driverClass)").count == 2)
+    }
+
+    // MARK: - probing
+
+    @Test("asks the driver to probe, and reads a mutant no test reaches")
+    func probes() throws {
+        let runner = try FakeRunner()
+        var events: [Batch.Event] = []
+
+        let verdicts = try run(["-", "a", "uncovered-b"], with: runner, events: &events)
+
+        #expect(verdicts == ["-": .survived, "a": .survived, "uncovered-b": .noCoverage])
+        #expect(runner.probes.count == 1)
+        #expect(runner.probes.first != "none")
+        #expect(events.contains(.finished(Batch.probe, .survived, 0.1)))
+    }
+
+    /// A probe that dies is not a mutant's doing; nothing should be scored
+    /// for it, and the batch carries on the old way.
+    @Test("carries on without probing when the probe crashes")
+    func probeCrash() throws {
+        let runner = try FakeRunner()
+        var events: [Batch.Event] = []
+
+        let verdicts = try run(["-", "dyingprobe-a", "killed-b"], with: runner, events: &events)
+
+        #expect(verdicts == ["-": .survived, "dyingprobe-a": .survived, "killed-b": .killed])
+        #expect(verdicts[Batch.probe] == nil)
+        #expect(runner.probes.count == 2)
+        #expect(runner.probes.last == "none")
+    }
+
+    @Test("reads a mutant no test reaches from the driver's report")
+    func parseNoCoverage() {
+        #expect(Batch.Report.parse("END A_B_1_2_3 nocoverage 0") == .finished("A_B_1_2_3", .noCoverage, 0))
+    }
+
+    /// A filter that matched no test makes Swift Testing exit 69. That says
+    /// nothing about the mutant, and must not score a kill.
+    @Test("reads a run whose filter matched no test as an error")
+    func parseNoTests() {
+        #expect(Batch.Report.parse("END A_B_1_2_3 error 0.01") == .finished("A_B_1_2_3", .error, 0.01))
+        #expect(Batch.driver.contains("case \(Batch.noTestsFound): return \"error\""))
     }
 }

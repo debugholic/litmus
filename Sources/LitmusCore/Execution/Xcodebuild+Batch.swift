@@ -30,12 +30,32 @@ extension Xcodebuild: BatchingHarness {
         var verdicts: [String: Verdict] = [:]
         var remaining = ids
 
+        // Where the driver notes which tests reach which mutants. Kept across
+        // relaunches, so a crash after the probe does not probe again.
+        var probeDirectory: URL? = derivedDataPath
+            .appendingPathComponent("lanes")
+            .appendingPathComponent(Self.folderName(for: lane))
+            .appendingPathComponent("probe-\(UUID().uuidString)")
+        if let probeDirectory {
+            try FileManager.default.createDirectory(at: probeDirectory, withIntermediateDirectories: true)
+        }
+        defer { probeDirectory.map { try? FileManager.default.removeItem(at: $0) } }
+
         while !remaining.isEmpty {
             let outcome = try launch(
                 target: target, xctestrun: xctestrun, lane: lane, ids: remaining,
-                timeouts: &timeouts, onEvent: onEvent
+                probeDirectory: probeDirectory, timeouts: &timeouts, onEvent: onEvent
             )
-            verdicts.merge(outcome.verdicts) { _, new in new }
+            verdicts.merge(outcome.verdicts.filter { $0.key != Batch.probe }) { _, new in new }
+
+            // A probe that crashes or hangs is not a mutant's doing. Carry on
+            // without it: every mutant runs every test, as before probes.
+            if outcome.unfinished?.id == Batch.probe {
+                probeDirectory.map { try? FileManager.default.removeItem(at: $0) }
+                probeDirectory = nil
+                remaining = remaining.filter { verdicts[$0] == nil }
+                continue
+            }
 
             // The mutant that was running when the process died, or was
             // stopped for taking too long, took the process with it. A crash
@@ -73,6 +93,7 @@ extension Xcodebuild: BatchingHarness {
         xctestrun: URL,
         lane: String,
         ids: [String],
+        probeDirectory: URL?,
         timeouts: inout Batch.Timeouts,
         onEvent: (Batch.Event) -> Void
     ) throws -> Launch {
@@ -100,10 +121,14 @@ extension Xcodebuild: BatchingHarness {
             "-resultBundlePath", scratch.appendingPathComponent("result.xcresult").path,
             "-only-testing:\(target)/\(Batch.driverClass)/\(Batch.driverTest)",
         ]
-        process.environment = ProcessInfo.processInfo.environment.merging([
+        var environment = [
             "TEST_RUNNER_\(Batch.batchFileVariable)": batchFile.path,
             "TEST_RUNNER_\(Batch.resultsFileVariable)": resultsFile.path,
-        ]) { _, new in new }
+        ]
+        if let probeDirectory {
+            environment["TEST_RUNNER_\(Batch.probeDirectoryVariable)"] = probeDirectory.path
+        }
+        process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
 
         // Drained on its own thread: a full pipe would stall xcodebuild.
         let log = LogTail()
@@ -146,7 +171,11 @@ extension Xcodebuild: BatchingHarness {
             consume()
 
             if let running = current {
-                let limit = running.id == Batch.baseline ? timeouts.baseline : timeouts.mutant
+                // The probe runs every test once more, one at a time: about a
+                // baseline's worth, so it gets the baseline's allowance.
+                let limit = running.id == Batch.baseline || running.id == Batch.probe
+                    ? timeouts.baseline
+                    : timeouts.mutant
                 if Date().timeIntervalSince(running.started) > limit {
                     Subprocess.stop(process)
                     stopped = true

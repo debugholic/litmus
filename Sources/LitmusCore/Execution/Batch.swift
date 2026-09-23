@@ -51,6 +51,12 @@ public enum Batch {
     static let resultsFileVariable = "LITMUS_RESULTS_FILE"
     static let driverClass = "__LitmusDriver"
     static let driverTest = "test__litmus"
+    static let probeDirectoryVariable = "LITMUS_PROBE_DIR"
+    /// What Swift Testing returns when a filter matches no test.
+    static let noTestsFound = 69
+    /// The step after the baseline that runs each test alone to see which
+    /// mutants it reaches.
+    public static let probe = "~probe"
     /// The first line of the driver, so the tests' own code can be told apart.
     static let driverMarker = "// ─── Added by litmus to its working copy."
 
@@ -78,6 +84,7 @@ public enum Batch {
                 let resultsPath = environment["\(resultsFileVariable)"],
                 let batch = try? String(contentsOfFile: batchPath, encoding: .utf8)
             else { return }
+            let probeDirectory = environment["\(probeDirectoryVariable)"]
 
             FileManager.default.createFile(atPath: resultsPath, contents: nil)
             guard let results = FileHandle(forWritingAtPath: resultsPath) else { return }
@@ -89,28 +96,126 @@ public enum Batch {
                 try? results.synchronize()
             }
 
-            let arguments = try JSONDecoder().decode(
-                __CommandLineArguments_v0.self,
-                from: Data(#"{"parallel":false,"quiet":true}"#.utf8)
-            )
+            func run(_ filter: [String]?) async -> CInt {
+                var arguments = __CommandLineArguments_v0()
+                arguments.parallel = false
+                arguments.quiet = true
+                arguments.filter = filter
+                return await __swiftPMEntryPoint(passing: arguments)
+            }
+
+            // Which tests reach each mutant, keyed by mutant id. Nil runs
+            // every test for every mutant.
+            var reaching: [String: [String]]?
 
             for id in batch.split(separator: "\\n").map(String.init) where !id.isEmpty {
                 if id == "\(baseline)" {
                     unsetenv("\(MutationSwitch.activeVariable)")
-                } else {
-                    setenv("\(MutationSwitch.activeVariable)", id, 1)
+                    record("START \\(id)")
+                    let started = Date()
+                    let code = await run(nil)
+                    record("END \\(id) \\(code == 0 ? "survived" : "killed") \\(Date().timeIntervalSince(started))")
+
+                    // Measured against a failing suite, every mutant looks killed.
+                    if code != 0 { break }
+
+                    if let probeDirectory {
+                        record("START \(probe)")
+                        let probed = Date()
+                        reaching = await Self.probe(in: probeDirectory, run: run)
+                        record("END \(probe) survived \\(Date().timeIntervalSince(probed))")
+                    }
+                    continue
                 }
 
+                // A relaunch after a crash reads what the first launch probed.
+                if reaching == nil, let probeDirectory {
+                    reaching = Self.readMap(in: probeDirectory)
+                }
+
+                var filter: [String]?
+                if let reaching {
+                    let tests = reaching[id] ?? []
+                    guard !tests.isEmpty else {
+                        record("START \\(id)")
+                        record("END \\(id) nocoverage 0")
+                        continue
+                    }
+                    filter = tests.map { NSRegularExpression.escapedPattern(for: $0) }
+                }
+
+                setenv("\(MutationSwitch.activeVariable)", id, 1)
                 record("START \\(id)")
                 let started = Date()
-                let code: CInt = await __swiftPMEntryPoint(passing: arguments)
-                record("END \\(id) \\(code == 0 ? "survived" : "killed") \\(Date().timeIntervalSince(started))")
-
-                // Measured against a failing suite, every mutant looks killed.
-                if id == "\(baseline)", code != 0 { break }
+                let code = await run(filter)
+                record("END \\(id) \\(Self.verdict(code)) \\(Date().timeIntervalSince(started))")
             }
 
             unsetenv("\(MutationSwitch.activeVariable)")
+        }
+
+        /// Swift Testing's exit codes: 0 when every test passed, 69 when the
+        /// filter matched no test at all. That is not the mutant's doing, and
+        /// reading it as a failure would score a kill that never happened.
+        private static func verdict(_ code: CInt) -> String {
+            switch code {
+            case 0: return "survived"
+            case \(noTestsFound): return "error"
+            default: return "killed"
+            }
+        }
+
+        /// Runs each test on its own, noting which mutant switches it passes
+        /// through. A switch no test passes through is code no test reaches.
+        private static func probe(
+            in directory: String,
+            run: ([String]?) async -> CInt
+        ) async -> [String: [String]] {
+            let listing = directory + "/tests.jsonl"
+            var arguments = __CommandLineArguments_v0()
+            arguments.listTests = true
+            arguments.eventStreamOutputPath = listing
+            arguments.eventStreamSchemaVersion = "0"
+            let _: CInt = await __swiftPMEntryPoint(passing: arguments)
+
+            var tests: [String] = []
+            for line in ((try? String(contentsOfFile: listing, encoding: .utf8)) ?? "").split(separator: "\\n") {
+                guard
+                    let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                    object["kind"] as? String == "test",
+                    let payload = object["payload"] as? [String: Any],
+                    payload["kind"] as? String == "function",
+                    let id = payload["id"] as? String
+                else { continue }
+                tests.append(id)
+            }
+
+            var reaching: [String: [String]] = [:]
+            for (index, test) in tests.enumerated() {
+                let file = directory + "/\\(index).probe"
+                setenv("\(MutationSwitch.probeVariable)", file, 1)
+                _ = await run([NSRegularExpression.escapedPattern(for: test)])
+                unsetenv("\(MutationSwitch.probeVariable)")
+
+                for id in ((try? String(contentsOfFile: file, encoding: .utf8)) ?? "").split(separator: "\\n") {
+                    reaching[String(id), default: []].append(test)
+                }
+            }
+
+            let map = reaching.map { ([$0.key] + $0.value).joined(separator: "\\t") }.joined(separator: "\\n")
+            try? map.write(toFile: directory + "/map.tsv", atomically: true, encoding: .utf8)
+            return reaching
+        }
+
+        private static func readMap(in directory: String) -> [String: [String]]? {
+            guard let text = try? String(contentsOfFile: directory + "/map.tsv", encoding: .utf8) else { return nil }
+            var reaching: [String: [String]] = [:]
+            for line in text.split(separator: "\\n") {
+                let fields = line.split(separator: "\\t").map(String.init)
+                guard let id = fields.first else { continue }
+                reaching[id] = Array(fields.dropFirst())
+            }
+            return reaching
         }
     }
     """
@@ -179,6 +284,8 @@ extension Batch {
                 switch words[2] {
                 case "killed": return .finished(words[1], .killed, duration)
                 case "survived": return .finished(words[1], .survived, duration)
+                case "nocoverage": return .finished(words[1], .noCoverage, duration)
+                case "error": return .finished(words[1], .error, duration)
                 default: return nil
                 }
             }

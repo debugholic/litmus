@@ -12,6 +12,8 @@ public enum GapKind: String, Sendable, CaseIterable {
     case sideEffect = "side-effect"
     /// Arithmetic or a literal changed: nothing checks the value it makes.
     case value
+    /// No test runs this code at all.
+    case unreached
 
     /// What to add, in a sentence.
     public var hint: String {
@@ -21,7 +23,16 @@ public enum GapKind: String, Sendable, CaseIterable {
         case .branch: return "add a case for the other side of this condition"
         case .sideEffect: return "check that this call happens, with the right arguments"
         case .value: return "check the value this computes"
+        case .unreached: return "no test runs this code; call it from a test"
         }
+    }
+}
+
+extension MutantResult {
+    /// What this result says is missing: the mutant's own kind, or that no
+    /// test reached it at all.
+    public var gapKind: GapKind {
+        verdict == .noCoverage ? .unreached : mutant.gapKind
     }
 }
 
@@ -69,7 +80,7 @@ public struct FunctionGap: Sendable {
 
         return groups.values
             .compactMap { results -> FunctionGap? in
-                let survivors = results.filter { $0.verdict == .survived }
+                let survivors = results.filter { $0.verdict == .survived || $0.verdict == .noCoverage }
                 guard let first = results.first, !survivors.isEmpty else { return nil }
 
                 let caught = results.count { $0.verdict == .killed || $0.verdict == .timedOut }
