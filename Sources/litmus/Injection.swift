@@ -35,19 +35,25 @@ struct Injection {
             }
 
             changed = diff
-            print("changes since \(base)".dim)
+            print("  changes since \(base)")
         } else {
-            print("the whole tree".dim)
+            print("  the whole tree")
         }
 
         var coverage: Coverage?
         if scope.coverage {
-            print("measuring coverage…".dim)
-
             let (testHarness, lanes) = try harness.resolved(for: project) {
-                print("  \($0)".dim)
+                print("  \($0)")
             }
+
+            print("  measuring coverage — building and running the suite once…")
+
+            let heartbeat = Heartbeat()
+            heartbeat.begin()
+            defer { heartbeat.end() }
+
             let measured = try testHarness.coverage(lane: lanes[0])
+            let took = heartbeat.end()
 
             guard !measured.isEmpty else {
                 throw ValidationError(
@@ -55,6 +61,8 @@ struct Injection {
                 )
             }
 
+            print("  measured in \(Heartbeat.format(took ?? 0))"
+                + " — \(measured.deadFiles) file(s) with nothing running in them")
             coverage = measured
         }
 
@@ -62,7 +70,7 @@ struct Injection {
             include: scope.only,
             coverage: coverage,
             changed: changed
-        )(project: project, workingCopy: workingCopy) { if verbose { print("  \($0)".dim) } }
+        )(project: project, workingCopy: workingCopy) { if verbose { print("    \($0)") } }
 
         guard !result.mutants.isEmpty else {
             var why: [String] = []

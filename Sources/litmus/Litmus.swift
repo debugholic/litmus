@@ -139,21 +139,31 @@ struct Run: AsyncParsableCommand {
     /// A build is minutes and a single mutant can be more than that, all of it
     /// with nothing on screen. Silence on a terminal reads as a hang, and the
     /// honest thing to do is to name the step before waiting on it.
+    /// One at a time: the steps below never overlap, and a mutant's own line
+    /// is printed the moment it starts.
+    private static let heartbeat = Heartbeat()
+
     private static func show(_ step: MutationRun.Step) {
         switch step {
         case .building:
             print("  building once, with every mutant switched off…")
+            heartbeat.begin()
 
         case .checkingBaseline:
+            heartbeat.end()
             print("  running the suite untouched, to check it passes…")
+            heartbeat.begin()
 
         case let .baselinePassed(duration):
+            heartbeat.end()
             print("  baseline passed in \(time(duration))\n")
 
         case let .started(mutant):
-            print("  → \(location(mutant))  \(mutant.description)".dim)
+            print("  → \(location(mutant))  \(mutant.description)")
+            heartbeat.begin()
 
         case let .finished(result, done, total):
+            heartbeat.end()
             let mark: String
             switch result.verdict {
             case .killed: mark = "✔ killed  ".green
@@ -172,9 +182,7 @@ struct Run: AsyncParsableCommand {
     }
 
     private static func time(_ seconds: TimeInterval) -> String {
-        seconds < 60
-            ? String(format: "%.0fs", seconds)
-            : String(format: "%dm %02ds", Int(seconds) / 60, Int(seconds) % 60)
+        Heartbeat.format(seconds)
     }
 }
 
