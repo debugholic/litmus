@@ -14,6 +14,8 @@ public struct ProjectInjection: Sendable {
         public let uncovered: Int
         /// Mutants dropped because the change did not touch them.
         public let unchanged: Int
+        /// Files left alone because the tests are not aimed at them.
+        public let outOfScope: Int
     }
 
     /// Directories the build makes for itself, and can make again.
@@ -53,17 +55,23 @@ public struct ProjectInjection: Sendable {
     /// the verdict it had on the last run, so re-earning it costs time and
     /// tells nobody anything.
     public let changed: ChangedLines?
+    /// The files the tests are aimed at, in the original's paths. A file
+    /// outside it is copied untouched: its mutants would survive whatever
+    /// they did, and compiling them in only makes the build longer.
+    public let scope: TestedScope?
 
     public init(
         injector: SchemataInjector = SchemataInjector(),
         include: String? = nil,
         coverage: Coverage? = nil,
-        changed: ChangedLines? = nil
+        changed: ChangedLines? = nil,
+        scope: TestedScope? = nil
     ) {
         self.injector = injector
         self.include = include
         self.coverage = coverage
         self.changed = changed
+        self.scope = scope
     }
 
     public func callAsFunction(
@@ -77,8 +85,10 @@ public struct ProjectInjection: Sendable {
         var untouched = 0
         var uncovered = 0
         var unchanged = 0
+        var outOfScope = 0
 
         let files = try swiftFiles(in: workingCopy)
+        let scope = scope?.rebased(from: project, to: workingCopy)
 
         // Coverage was measured on the original project, so its paths name the
         // original tree. Re-keying it onto the copy is what makes the lookup
@@ -88,6 +98,11 @@ public struct ProjectInjection: Sendable {
 
         for file in files {
             if let include, !file.path.contains(include) { continue }
+
+            if let scope, !scope.contains(file.path) {
+                outOfScope += 1
+                continue
+            }
 
             let result = try injector(path: file.path)
             guard !result.mutants.isEmpty else {
@@ -123,7 +138,8 @@ public struct ProjectInjection: Sendable {
             mutants: mutants,
             untouched: untouched,
             uncovered: uncovered,
-            unchanged: unchanged
+            unchanged: unchanged,
+            outOfScope: outOfScope
         )
     }
 

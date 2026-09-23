@@ -50,7 +50,20 @@ extension TestedScope {
             let root = plist as? [String: Any]
         else { return nil }
 
-        let testTargets = testTargetNames(in: root)
+        return from(testTargets: testTargetNames(in: root), derivedData: derivedData)
+    }
+
+    /// Works the scope out from the result bundle of a finished test run.
+    ///
+    /// `xcodebuild test`, which the coverage run uses, leaves no .xctestrun
+    /// behind. The result bundle names the test bundles it ran, and the
+    /// build's file lists are in the same DerivedData as they would be after
+    /// build-for-testing.
+    static func from(resultBundle: URL, derivedData: URL) -> TestedScope? {
+        from(testTargets: testTargetNames(inResultBundle: resultBundle), derivedData: derivedData)
+    }
+
+    static func from(testTargets: [String], derivedData: URL) -> TestedScope? {
         guard !testTargets.isEmpty else { return nil }
 
         let fileLists = swiftFileLists(
@@ -134,6 +147,62 @@ extension TestedScope {
             .filter { !$0.hasPrefix("__") }
             .filter { root[$0] is [String: Any] }
             .sorted()
+    }
+
+    /// The test bundles a result bundle says ran.
+    static func testTargetNames(inResultBundle bundle: URL) -> [String] {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        process.arguments = ["xcresulttool", "get", "test-results", "tests", "--path", bundle.path]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+
+        guard (try? process.run()) != nil else { return [] }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+
+        return testTargetNames(inTestResults: data)
+    }
+
+    static func testTargetNames(inTestResults data: Data) -> [String] {
+        guard
+            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let nodes = root["testNodes"] as? [[String: Any]]
+        else { return [] }
+
+        var names: [String] = []
+        func walk(_ node: [String: Any]) {
+            if let type = node["nodeType"] as? String, type.hasSuffix("test bundle"),
+               let name = node["name"] as? String {
+                names.append(name)
+            }
+            for child in node["children"] as? [[String: Any]] ?? [] { walk(child) }
+        }
+        nodes.forEach(walk)
+
+        var seen: Set<String> = []
+        return names.filter { seen.insert($0).inserted }
+    }
+
+    /// The same scope, for a copy of the project at another path.
+    ///
+    /// Measured on the original and applied to litmus's working copy, where
+    /// every file has the same place relative to the root.
+    public func rebased(from original: URL, to copy: URL) -> TestedScope {
+        let from = Self.normalise(original.path) + "/"
+        let to = Self.normalise(copy.path) + "/"
+
+        func move(_ path: String) -> String {
+            let path = Self.normalise(path)
+            return path.hasPrefix(from) ? to + path.dropFirst(from.count) : path
+        }
+
+        return TestedScope(
+            modules: modules,
+            files: Set(files.map(move)),
+            testTargets: testTargets.map { TestTarget(name: $0.name, files: $0.files.map(move)) }
+        )
     }
 
     /// `FeatureSettingTests` tests `FeatureSetting`; `AppUITests` tests `App`.

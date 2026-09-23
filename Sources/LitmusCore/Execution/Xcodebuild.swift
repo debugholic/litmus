@@ -150,7 +150,7 @@ public struct Xcodebuild: Sendable, TestHarness {
     /// process per source file. Whole files with nothing running in them are
     /// where most of the waste is, and they come out of a single call.
     public func coverage(lane: String) throws -> Coverage {
-        let bundle = derivedDataPath.appendingPathComponent("litmus-coverage.xcresult")
+        let bundle = coverageBundle
         // xcodebuild refuses to write over one that is already there.
         try? FileManager.default.removeItem(at: bundle)
 
@@ -177,6 +177,14 @@ public struct Xcodebuild: Sendable, TestHarness {
         }
 
         return try Self.parse(report)
+    }
+
+    public func coverageScope() -> TestedScope? {
+        TestedScope.from(resultBundle: coverageBundle, derivedData: derivedDataPath)
+    }
+
+    var coverageBundle: URL {
+        derivedDataPath.appendingPathComponent("litmus-coverage.xcresult")
     }
 
     public func testedScope(_ built: BuiltTests) -> TestedScope? {

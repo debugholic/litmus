@@ -41,6 +41,7 @@ struct Injection {
         }
 
         var coverage: Coverage?
+        var tested: TestedScope?
         if scope.coverage {
             let (testHarness, lanes) = try harness.resolved(for: project) {
                 print("  \($0)")
@@ -64,12 +65,20 @@ struct Injection {
             print("  measured in \(Heartbeat.format(took ?? 0))"
                 + " — \(measured.deadFiles) file(s) with nothing running in them")
             coverage = measured
+
+            // The coverage run already built the tests, so it can say which
+            // modules they are aimed at before anything is written.
+            tested = testHarness.coverageScope()
+            if let tested {
+                print("  these tests are aimed at \(tested.modules.joined(separator: ", "))")
+            }
         }
 
         let result = try ProjectInjection(
             include: scope.only,
             coverage: coverage,
-            changed: changed
+            changed: changed,
+            scope: tested
         )(project: project, workingCopy: workingCopy) { if verbose { print("    \($0)") } }
 
         guard !result.mutants.isEmpty else {
@@ -90,6 +99,7 @@ struct Injection {
     /// clean bill of health for the whole project.
     static func scopeLine(_ result: ProjectInjection.Result) -> String {
         var dropped: [String] = []
+        if result.outOfScope > 0 { dropped.append("\(result.outOfScope) file(s) the tests do not aim at") }
         if result.unchanged > 0 { dropped.append("\(result.unchanged) outside the change") }
         if result.uncovered > 0 { dropped.append("\(result.uncovered) unreachable") }
 

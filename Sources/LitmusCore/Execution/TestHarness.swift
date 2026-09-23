@@ -53,10 +53,15 @@ public protocol TestHarness: Sendable {
     /// The source files the built tests are aimed at, or nil when the harness
     /// cannot tell. Mutants outside it are not run.
     func testedScope(_ built: BuiltTests) -> TestedScope?
+
+    /// The scope of the build the coverage run just made, so mutants outside
+    /// it are never written — and never compiled into the working copy.
+    func coverageScope() -> TestedScope?
 }
 
 extension TestHarness {
     public func testedScope(_ built: BuiltTests) -> TestedScope? { nil }
+    public func coverageScope() -> TestedScope? { nil }
 }
 
 /// A harness that can run many mutants in one test process.
