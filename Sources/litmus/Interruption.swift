@@ -51,6 +51,9 @@ enum RunLock {
     nonisolated(unsafe) private static var held: URL?
 
     static func acquire(for workingCopy: URL) throws {
+        try FileManager.default.createDirectory(
+            at: workingCopy.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
         let file = workingCopy.deletingLastPathComponent()
             .appendingPathComponent(workingCopy.lastPathComponent + ".lock")
 
