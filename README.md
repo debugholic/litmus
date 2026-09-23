@@ -10,13 +10,13 @@ question: it changes your code on purpose and checks whether your tests fail.
 $ litmus
 
   ✔ killed   TestSuiteOutcome.swift:14  swapped the branches of a ternary
-  ✘ survived PlayerControlViewModel.swift:479  removed a call whose result is unused
+  ✘ survived CartViewModel.swift:479  removed a call whose result is unused
 
 Litmus score 50%
 killed 1 / survived 1 / error 0
 
 survived — nothing failed when this changed:
-  PlayerControlViewModel.swift:479  removed a call whose result is unused
+  CartViewModel.swift:479  removed a call whose result is unused
 ```
 
 A surviving mutant is a hole. Something in your code can be wrong and every
@@ -49,8 +49,8 @@ measuring coverage…
 16 mutants across 2 file(s), skipping 1391 outside the change and 85 unreachable
   checking the baseline first…
 
-  ✔ killed   PlayerControlViewModel+Bookmark.swift:26  removed a call whose result is unused
-  ✘ survived PlayerControlViewModel.swift:479  removed a call whose result is unused
+  ✔ killed   CartViewModel+Coupon.swift:26  removed a call whose result is unused
+  ✘ survived CartViewModel.swift:479  removed a call whose result is unused
 
 Litmus score 50%
 killed 1 / survived 1 / error 0
