@@ -49,7 +49,7 @@ struct Injection {
 
         var coverage: Coverage?
         var tested: TestedScope?
-        if scope.coverage {
+        if measuresCoverage {
             let (testHarness, lanes) = try harness.resolved(for: workingCopy, writeScheme: true) {
                 print("  \($0)")
             }
@@ -98,6 +98,22 @@ struct Injection {
         }
 
         return result
+    }
+
+    /// Whether to run the suite with coverage on before injecting.
+    ///
+    /// Asked for or refused explicitly, that is the answer. Otherwise it is
+    /// skipped for a simulator project whose tests are all Swift Testing:
+    /// the probe finds unreached mutants in a minute, where the coverage run
+    /// is a build and a whole suite on the simulator.
+    private var measuresCoverage: Bool {
+        if let asked = scope.coverage { return asked }
+
+        let kind = harness.harness ?? Discovery.harness(in: project)
+        guard kind == .xcode, TestSources.allSwiftTesting(in: project) else { return true }
+
+        print("  skipping the coverage run: every test is Swift Testing, so each is probed in process")
+        return false
     }
 
     /// Runs the suite with coverage on.
