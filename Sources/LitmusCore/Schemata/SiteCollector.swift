@@ -58,16 +58,6 @@ final class SiteCollector: SyntaxVisitor {
             return .visitChildren
         }
 
-        // `mode == .game ? "Quiz" : "Review"` picks a label. Swapping it
-        // shows the other word; a test that pins copy is not the hole this
-        // is looking for, and a survivor here is noise.
-        let elements = Array(element.sequence.elements)
-        if element.index + 1 < elements.count,
-           node.thenExpression.is(StringLiteralExprSyntax.self),
-           elements[element.index + 1].is(StringLiteralExprSyntax.self) {
-            return .visitChildren
-        }
-
         record(
             node,
             at: node.startLocation(converter: converter),
