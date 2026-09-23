@@ -64,7 +64,7 @@ Where a guess would be wrong, pass it: `--harness xcode|swiftpm`,
 An Xcode project runs every unit test it has. A project's schemes are for
 building its apps, and the tests they run are whatever someone remembered to
 tick: on one Tuist project the shared schemes ran 15 of 70 test targets, and
-the Domain, Data and Core tests were in none. So Litmus reads each project in
+the other 55 were in none. So Litmus reads each project in
 the workspace for its unit test targets and writes a scheme naming all of
 them — into its working copy, never into your project. UI tests are left out;
 they drive the app from outside and cannot see a mutant's module.
@@ -130,7 +130,7 @@ branch, or outside a repository with a remote, there is nothing to compare
 against and the whole tree is the honest scope.
 
 **What the tests are aimed at.** Each test target names the modules it tests
-— by name, `FeatureSettingTests` for `FeatureSetting`, and by `@testable
+— by name, `CheckoutTests` for `Checkout`, and by `@testable
 import`. A mutant runs only against the test targets aimed at its module. On
 one Tuist project a feature's seven tests reached over 1,200 files through
 the app that hosts them; they are run against that feature's two, because the
@@ -147,7 +147,7 @@ writing, so a skipped mutant costs neither a run nor the file growth.
 litmus --all           # the whole tree
 litmus --since main    # a different base
 litmus --no-coverage   # keep what no test reaches
-litmus --only Bookmark # only paths containing this
+litmus --only Checkout # only paths containing this
 ```
 
 On one iOS project — 1,492 mutants across 105 files:
@@ -210,12 +210,12 @@ The switch goes where the change happens rather than around the block holding
 it:
 
 ```swift
-let isOffline = (__litmus_Bookmark_ChangeLogicalConnector_24_49_832
-    ? (!connection.isAvailable || info.playType == .download)
-    : (!connection.isAvailable && info.playType == .download))
+let canCheckout = (__litmus_Cart_ChangeLogicalConnector_24_49_832
+    ? (!cart.isEmpty || user.isSignedIn)
+    : (!cart.isEmpty && user.isSignedIn))
 
-private var __litmus_Bookmark_ChangeLogicalConnector_24_49_832: Bool {
-    __litmus_on("Bookmark_ChangeLogicalConnector_24_49_832")
+private var __litmus_Cart_ChangeLogicalConnector_24_49_832: Bool {
+    __litmus_on("Cart_ChangeLogicalConnector_24_49_832")
 }
 ```
 
