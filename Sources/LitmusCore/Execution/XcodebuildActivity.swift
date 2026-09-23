@@ -5,10 +5,13 @@ import Foundation
 /// A coverage run over seventy test targets is twenty minutes of one command.
 /// The time alone does not say whether it is still compiling or halfway
 /// through the tests, so the log is read line by line for the target being
-/// built, the bundle being tested, and how many tests have finished.
+/// built, the suite being tested, and how many tests have finished.
+///
+/// No count of targets: xcodebuild names every target of the build up front,
+/// in the steps that plan it, so a count reached its total in the first
+/// minute and sat there for the next thirty.
 public final class XcodebuildActivity: @unchecked Sendable {
     private let lock = NSLock()
-    private var built: [String] = []
     private var building: String?
     private var testing: String?
     private var testsRun = 0
@@ -22,15 +25,34 @@ public final class XcodebuildActivity: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
-        if let target = Self.capture(#"\(in target '([^']+)' from project '[^']+'\)"#, in: line) {
+        // Once tests are running, a stray build line is not a return to
+        // building.
+        if testing == nil, testsRun == 0,
+           let target = Self.capture(#"\(in target '([^']+)' from project '[^']+'\)"#, in: line) {
             guard target != building else { return nil }
             building = target
-            if !built.contains(target) { built.append(target) }
             return summaryLocked
         }
 
-        if let bundle = Self.capture(#"^Test [Ss]uite '([^']+)\.xctest' started"#, in: line) {
-            testing = bundle
+        // Swift Testing, as xcodebuild prints it: `◇ Suite SettingTests started.`
+        if let suite = Self.capture(#"^◇ Suite (.+) started\."#, in: line) {
+            testing = suite
+            return summaryLocked
+        }
+
+        // XCTest: `Test Suite 'SettingTests' started at …`, but not the
+        // wrapper suites every run opens with.
+        if let suite = Self.capture(#"^Test [Ss]uite '([^']+)' started"#, in: line),
+           suite != "All tests", suite != "Selected tests", !suite.hasSuffix(".xctest") {
+            testing = suite
+            return summaryLocked
+        }
+
+        // `✔ Test "name" passed after …` and `✘ Test "name" failed after …`,
+        // not the `Test run with 5 tests …` summary.
+        if line.hasPrefix("✔ Test ") || line.hasPrefix("✘ Test "), !line.contains("Test run with") {
+            testsRun += 1
+            if line.hasPrefix("✘") { testsFailed += 1 }
             return summaryLocked
         }
 
@@ -55,7 +77,7 @@ public final class XcodebuildActivity: @unchecked Sendable {
             return bundle + "\(testsRun) test(s) run, \(testsFailed) failed"
         }
         if let building {
-            return "building \(building) · \(built.count) target(s) so far"
+            return "building \(building)"
         }
         return nil
     }
