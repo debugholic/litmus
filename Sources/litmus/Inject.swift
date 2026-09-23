@@ -10,7 +10,7 @@ struct Inject: AsyncParsableCommand {
     @Option(help: "Project to copy. It is never modified.")
     var project: String = "."
 
-    @Option(help: "Where to put the working copy. Defaults to <project>_litmus.")
+    @Option(help: "Where to put the working copy. Defaults to ~/Library/Caches/litmus/<project>-<id>.")
     var output: String?
 
     @OptionGroup var scope: ScopeOptions
@@ -22,8 +22,7 @@ struct Inject: AsyncParsableCommand {
     func run() async throws {
         let project = URL(fileURLWithPath: project).standardizedFileURL
         let workingCopy = output.map { URL(fileURLWithPath: $0) }
-            ?? project.deletingLastPathComponent()
-                .appendingPathComponent(project.lastPathComponent + "_litmus")
+            ?? WorkingCopy.location(for: project)
 
         let result: ProjectInjection.Result
         do {
