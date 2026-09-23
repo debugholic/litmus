@@ -110,10 +110,26 @@ public struct Xcodebuild: Sendable, TestHarness {
         switchOn mutantSwitch: String? = nil,
         onlyTesting: [String] = []
     ) throws -> TestOutput {
+        // Without -derivedDataPath, every run gets a DerivedData folder of its
+        // own under ~/Library: one overnight run left 427 of them, 1.3 GB.
+        // One folder per lane instead, so concurrent lanes do not share one.
+        let laneData = derivedDataPath
+            .appendingPathComponent("lanes")
+            .appendingPathComponent(Self.folderName(for: destination))
+
+        // The result bundle is never read — the verdict comes from the log —
+        // so it goes somewhere disposable and is removed after the run.
+        let resultBundle = laneData
+            .appendingPathComponent("results")
+            .appendingPathComponent("\(UUID().uuidString).xcresult")
+        defer { try? FileManager.default.removeItem(at: resultBundle) }
+
         var arguments = [
             "test-without-building",
             "-xctestrun", xctestrun.path,
             "-destination", destination,
+            "-derivedDataPath", laneData.path,
+            "-resultBundlePath", resultBundle.path,
         ]
         arguments += onlyTesting.flatMap { ["-only-testing:\($0)"] }
 
@@ -161,6 +177,11 @@ public struct Xcodebuild: Sendable, TestHarness {
         }
 
         return try Self.parse(report)
+    }
+
+    /// A destination as a folder name.
+    static func folderName(for destination: String) -> String {
+        String(destination.map { $0.isLetter || $0.isNumber || $0 == "-" ? $0 : "_" })
     }
 
     /// Why a coverage run did not finish.

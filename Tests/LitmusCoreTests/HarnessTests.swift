@@ -163,6 +163,27 @@ struct HarnessTests {
         #expect(output.log.contains("-destination platform=iOS Simulator,id=UDID"))
     }
 
+    /// Without these, xcodebuild made a DerivedData folder per run: 427 of
+    /// them, 1.3 GB, after one night.
+    @Test("keeps each run's data in the lane's own folder")
+    func xcodebuildDerivedData() throws {
+        let tool = try FakeTool()
+        let xcodebuild = Xcodebuild(
+            executable: tool.path,
+            workingDirectory: workingDirectory,
+            scheme: "MyApp",
+            derivedDataPath: URL(fileURLWithPath: "/tmp/dd")
+        )
+
+        let output = try xcodebuild.testWithoutBuilding(
+            xctestrun: URL(fileURLWithPath: "/tmp/App.xctestrun"),
+            destination: "platform=iOS Simulator,id=ABC"
+        )
+
+        #expect(output.log.contains("-derivedDataPath /tmp/dd/lanes/platform_iOS_Simulator_id_ABC"))
+        #expect(output.log.contains("-resultBundlePath /tmp/dd/lanes/platform_iOS_Simulator_id_ABC/results/"))
+    }
+
     @Test("narrows the run when asked to")
     func xcodebuildOnlyTesting() throws {
         let tool = try FakeTool()
