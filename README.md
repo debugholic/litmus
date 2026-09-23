@@ -22,6 +22,15 @@ survived — nothing failed when this changed:
 A surviving mutant is a hole. Something in your code can be wrong and every
 test still passes.
 
+## Installing
+
+```
+brew install debugholic/tap/litmus
+```
+
+A universal binary for Apple silicon and Intel, from the latest release.
+`litmus --version` says which one you have.
+
 ## Using it
 
 ```
@@ -57,7 +66,41 @@ one: a simulator is not cheap, and past a point they contend for the machine
 rather than share it.
 
 `--format plain|json|html|xcode` and `--output <path>` control the report;
-`xcode` emits `warning:` lines Xcode shows beside the mutated line.
+`xcode` emits `warning:` lines Xcode shows beside the mutated line. With more
+than one file, the plain report scores each, weakest first:
+
+```
+Litmus score 80%
+killed 3 / survived 1 / timeout 1 / unviable 1 / error 0
+
+by file, weakest first:
+    0%  More/Zero.swift  killed 0 / survived 1 / error 0
+  100%  Ver.swift        killed 3 / survived 0 / timeout 1 / unviable 1 / error 0
+```
+
+### The score
+
+```
+score = (killed + timeout) / (killed + timeout + survived)
+```
+
+| | | in the score |
+|---|---|---|
+| `killed` | a test failed, or the process crashed | caught |
+| `timeout` | the suite ran ten times longer than the baseline, at least a minute, and was stopped | caught |
+| `survived` | every test passed | missed |
+| `unviable` | the compiler rejected the change | left out |
+| `error` | the suite could not run | left out |
+
+A change the compiler rejects is not evidence that your tests would have
+caught it, and counting it as a kill is how a broken tool reports a flattering
+score. The build is not abandoned for it either: Litmus takes out the switches
+on the line the compiler named, writes that file again from the original, and
+builds the rest.
+
+Mutants filtered out before the run — outside the change, unreached by any
+test, or in code the tests are not aimed at — are not in the score at all. It
+measures the tests against the code they run, not the project.
 
 ### What it mutates, by default
 
@@ -71,6 +114,13 @@ review diffs against — and the diff is taken line by line, against the merge
 base, and reaches the working tree so uncommitted work counts. On the default
 branch, or outside a repository with a remote, there is nothing to compare
 against and the whole tree is the honest scope.
+
+**What the tests are aimed at.** A scheme's tests build a test target, and
+that target names the modules it tests — by name, `FeatureSettingTests` for
+`FeatureSetting`, and by `@testable import`. On one Tuist project a scheme
+whose seven tests cover one feature reached over 1,200 files; it is mutated in that
+feature's two, because the rest would survive whatever they said. This one is
+not a switch; it is what the scheme means.
 
 **What no test reaches.** A mutant on a line no test runs cannot be killed. It
 will survive whatever the code says, and the only thing running it buys is the
@@ -136,21 +186,26 @@ flag, and the suite is then run repeatedly with a different flag set.
 ```
 1. inject      every mutant is written into a copy of the source, switched off
 2. build       one build, every mutant inside it
-3. per mutant  set that mutant's variable, run the tests again
-4. score       killed / (killed + survived)
+3. per mutant  switch that mutant on, run the tests again
+4. score       (killed + timeout) / (killed + timeout + survived)
 ```
 
 The switch goes where the change happens rather than around the block holding
 it:
 
 ```swift
-private let __litmus_Bookmark_ChangeLogicalConnector_24_49_832 =
-    ProcessInfo.processInfo.environment["Bookmark_ChangeLogicalConnector_24_49_832"] != nil
-
 let isOffline = (__litmus_Bookmark_ChangeLogicalConnector_24_49_832
     ? (!connection.isAvailable || info.playType == .download)
     : (!connection.isAvailable && info.playType == .download))
+
+private var __litmus_Bookmark_ChangeLogicalConnector_24_49_832: Bool {
+    __litmus_on("Bookmark_ChangeLogicalConnector_24_49_832")
+}
 ```
+
+`__litmus_on` compares the id with `LITMUS_ACTIVE`, read with `getenv` every
+time the flag is evaluated, so the active mutant can change inside a running
+process.
 
 Wrapping the enclosing block instead would copy it once per mutant, and the
 cost multiplies through nesting: on one project that turned an 877-line file
@@ -167,6 +222,30 @@ documents as the supported way to pass a variable into the test runner process.
 The generated `.xctestrun` is read, never written, so mutants can run on
 several simulators at once without stepping on each other.
 
+### Many mutants in one process
+
+On a simulator, launching is most of what a mutant costs: installing the app
+and starting the runner took 85 of every 115 seconds. So when a scheme's
+tests are all Swift Testing, in one test bundle, Litmus adds a small driver to
+the working copy's tests. It is launched once, and switches from one mutant to
+the next, running the suite again each time. On one project 34 mutants took 99
+seconds this way against 65 minutes one launch at a time, and every verdict
+checked against a fresh process agreed.
+
+A mutant that crashes takes the process with it; Litmus records it as killed
+and launches again from the next one. One that hangs is stopped and recorded
+as a timeout.
+
+Two kinds of mutant still get a process of their own:
+
+- **XCTest cases, or a second test bundle.** The driver cannot rerun either,
+  so a scheme that has them runs every mutant in a fresh process.
+- **Values Swift computes once.** A global's or a static property's initial
+  value is kept from the first time it is read, with whichever mutant was on
+  then. Those mutants run after the batch, one launch each.
+
+`--isolate` gives every mutant a fresh process regardless.
+
 ## Operators
 
 | | |
@@ -180,26 +259,18 @@ several simulators at once without stepping on each other.
 an initializer's `super.init`, a call that never returns, and a block whose
 only statement is an expression, which is an implicit return.
 
-## Not counted in the score
-
-A mutant whose build fails is reported as `error`, not as `killed`. The
-compiler rejecting a change is not evidence that your tests would have caught
-it, and counting it as a kill is how a broken tool reports a flattering score.
-
 ## Status
 
 Injection is solid: 1,492 mutants across 105 files of a real project compile
-and run. The execution layer is newer and has been run end to end on both
-harnesses, on runs of tens of mutants rather than thousands.
+and run. Execution has been run end to end on both harnesses, and on a Tuist
+project with several schemes, in one process and one per mutant.
 
-Litmus is run against itself. Its own score is 61%, and the survivors are in
-the parts that touch the filesystem and spawn processes.
+Litmus is run against itself.
 
-Not there yet: a Homebrew tap, prebuilt binaries, line-level coverage on the
-`xcode` harness, and more than one worker on the `swiftpm` harness. Two
-`swift test` processes in one package directory contend over `.build` and
-report verdicts that disagree with a sequential run, so that is refused rather
-than warned about.
+Not there yet: line-level coverage on the `xcode` harness, and more than one
+worker on the `swiftpm` harness. Two `swift test` processes in one package
+directory contend over `.build` and report verdicts that disagree with a
+sequential run, so that is refused rather than warned about.
 
 ## License
 
