@@ -58,3 +58,20 @@ public protocol TestHarness: Sendable {
 extension TestHarness {
     public func testedScope(_ built: BuiltTests) -> TestedScope? { nil }
 }
+
+/// A harness that can run many mutants in one test process.
+public protocol BatchingHarness: TestHarness {
+    /// Adds the driver to the tests and rebuilds them, or nil when these
+    /// tests cannot be run that way.
+    func prepareBatch(_ built: BuiltTests, scope: TestedScope, lane: String) throws -> Batch.Plan?
+
+    /// Runs the batch to the end, relaunching past any mutant that takes the
+    /// process down, and returns a verdict for every id.
+    func runBatch(
+        _ plan: Batch.Plan,
+        lane: String,
+        ids: [String],
+        timeouts: Batch.Timeouts,
+        onEvent: (Batch.Event) -> Void
+    ) throws -> [String: Verdict]
+}

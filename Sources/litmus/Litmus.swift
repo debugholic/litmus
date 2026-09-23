@@ -42,6 +42,9 @@ struct Run: AsyncParsableCommand {
     @OptionGroup var scope: ScopeOptions
     @OptionGroup var harness: HarnessOptions
 
+    @Flag(help: "Give every mutant a fresh process instead of running them in one.")
+    var isolate = false
+
     @Option(help: "Report format: plain, json, html or xcode.")
     var format: ReportFormat = .plain
 
@@ -92,7 +95,7 @@ struct Run: AsyncParsableCommand {
         print("\n\(check.injected.count) mutants, \(lanes.count) at a time\n")
 
         let summary = try await MutationRun(
-            configuration: .init(harness: testHarness, lanes: lanes),
+            configuration: .init(harness: testHarness, lanes: lanes, batching: !isolate),
             progress: { Self.show($0) }
         )(check.injected)
 
@@ -161,6 +164,14 @@ struct Run: AsyncParsableCommand {
             if kept == 0 {
                 print("  nothing left to run: none of the mutants are in code these tests are aimed at")
             }
+
+        case .preparingBatch:
+            print("  adding the in-process driver and rebuilding the tests…")
+            heartbeat.begin()
+
+        case let .oneProcessPerMutant(reason):
+            heartbeat.end()
+            print("  one process per mutant: \(reason)")
 
         case .checkingBaseline:
             heartbeat.end()

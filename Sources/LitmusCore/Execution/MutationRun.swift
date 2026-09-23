@@ -8,10 +8,14 @@ public struct MutationRun: Sendable {
         /// One lane per worker: a simulator for xcodebuild, a plain slot for a
         /// Swift package. One entry means sequential.
         public let lanes: [String]
+        /// Whether to run many mutants in one test process when the tests
+        /// allow it. Off means a fresh process for every mutant.
+        public let batching: Bool
 
-        public init(harness: any TestHarness, lanes: [String]) {
+        public init(harness: any TestHarness, lanes: [String], batching: Bool = true) {
             self.harness = harness
             self.lanes = lanes
+            self.batching = batching
         }
     }
 
@@ -64,6 +68,10 @@ public struct MutationRun: Sendable {
         /// The build said which modules the tests are aimed at, and mutants
         /// outside them were left out.
         case scoped(modules: [String], kept: Int, dropped: Int)
+        /// Adding the in-process driver and rebuilding the tests.
+        case preparingBatch
+        /// Each mutant gets a process of its own, and why.
+        case oneProcessPerMutant(String)
         case checkingBaseline
         case baselinePassed(TimeInterval)
         case started(Mutant)
@@ -91,7 +99,8 @@ public struct MutationRun: Sendable {
         // A mutant in code these tests never look at survives whatever it
         // does, and each one costs a full run to prove it.
         var mutants = mutants
-        if let scope = harness.testedScope(built) {
+        let scope = harness.testedScope(built)
+        if let scope {
             let kept = mutants.filter { scope.contains($0.filePath) }
             progress(.scoped(modules: scope.modules, kept: kept.count, dropped: mutants.count - kept.count))
             mutants = kept
@@ -99,6 +108,19 @@ public struct MutationRun: Sendable {
 
         guard !mutants.isEmpty else {
             return Summary(results: [], duration: Date().timeIntervalSince(started))
+        }
+
+        if configuration.batching, let batching = harness as? any BatchingHarness {
+            if let scope, scope.batchIneligibility == nil {
+                progress(.preparingBatch)
+                if let plan = try batching.prepareBatch(built, scope: scope, lane: configuration.lanes[0]) {
+                    return try await runBatched(plan, mutants, using: batching, started: started)
+                }
+            } else {
+                progress(.oneProcessPerMutant(
+                    scope?.batchIneligibility ?? "could not tell which tests the build runs"
+                ))
+            }
         }
 
         // Every mutant is compiled in but switched off here, so this is the
@@ -157,6 +179,82 @@ public struct MutationRun: Sendable {
         return Summary(results: results, duration: Date().timeIntervalSince(started))
     }
 
+    /// Every lane runs its share of the mutants in one process. The first
+    /// lane opens with the baseline, and a red one fails the whole run.
+    private func runBatched(
+        _ plan: Batch.Plan,
+        _ mutants: [Mutant],
+        using harness: any BatchingHarness,
+        started: Date
+    ) async throws -> Summary {
+        let lanes = configuration.lanes
+        let byID = Dictionary(uniqueKeysWithValues: mutants.map { ($0.switchName, $0) })
+        let tally = Tally(total: mutants.count)
+        let progress = self.progress
+
+        // Round robin, so each lane gets a mix rather than one file's worth.
+        var shares = Array(repeating: [String](), count: lanes.count)
+        for (index, mutant) in mutants.enumerated() {
+            shares[index % lanes.count].append(mutant.switchName)
+        }
+
+        progress(.checkingBaseline)
+
+        let outcomes = try await withThrowingTaskGroup(
+            of: (verdicts: [String: Verdict], durations: [String: TimeInterval]).self
+        ) { group in
+            for (index, lane) in lanes.enumerated() {
+                let ids = (index == 0 ? [Batch.baseline] : []) + shares[index]
+                guard !ids.isEmpty else { continue }
+
+                group.addTask {
+                    var durations: [String: TimeInterval] = [:]
+                    let verdicts = try harness.runBatch(
+                        plan, lane: lane, ids: ids, timeouts: Batch.Timeouts()
+                    ) { event in
+                        switch event {
+                        case .started(Batch.baseline):
+                            break
+                        case let .finished(Batch.baseline, verdict, duration):
+                            if verdict == .survived { progress(.baselinePassed(duration)) }
+                        case let .started(id):
+                            if let mutant = byID[id] { progress(.started(mutant)) }
+                        case let .finished(id, verdict, duration):
+                            guard let mutant = byID[id] else { return }
+                            durations[id] = duration
+                            let result = MutantResult(mutant: mutant, verdict: verdict, duration: duration)
+                            progress(.finished(result, done: tally.next(), of: tally.total))
+                        }
+                    }
+                    return (verdicts, durations)
+                }
+            }
+
+            var verdicts: [String: Verdict] = [:]
+            var durations: [String: TimeInterval] = [:]
+            for try await outcome in group {
+                verdicts.merge(outcome.verdicts) { _, new in new }
+                durations.merge(outcome.durations) { _, new in new }
+            }
+            return (verdicts: verdicts, durations: durations)
+        }
+
+        let baseline = outcomes.verdicts[Batch.baseline] ?? .error
+        guard baseline == .survived else {
+            throw Failure.baselineNotGreen(baseline)
+        }
+
+        let results = mutants.map { mutant in
+            MutantResult(
+                mutant: mutant,
+                verdict: outcomes.verdicts[mutant.switchName] ?? .error,
+                duration: outcomes.durations[mutant.switchName] ?? 0
+            )
+        }
+
+        return Summary(results: results, duration: Date().timeIntervalSince(started))
+    }
+
     private func run(
         _ mutant: Mutant,
         in lane: String,
@@ -171,5 +269,21 @@ public struct MutationRun: Sendable {
             verdict: TestSuiteOutcome(log).verdict,
             duration: Date().timeIntervalSince(started)
         )
+    }
+}
+
+/// Counts finished mutants across lanes.
+private final class Tally: @unchecked Sendable {
+    let total: Int
+    private var done = 0
+    private let lock = NSLock()
+
+    init(total: Int) { self.total = total }
+
+    func next() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        done += 1
+        return done
     }
 }

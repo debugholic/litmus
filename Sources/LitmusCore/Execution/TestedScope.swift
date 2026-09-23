@@ -12,12 +12,20 @@ import Foundation
 /// and so is each module; the modules a test target is aimed at are the one
 /// it is named after and the ones it imports with `@testable`.
 public struct TestedScope: Sendable, Equatable {
+    /// A test target and the files it was compiled from.
+    public struct TestTarget: Sendable, Equatable {
+        public let name: String
+        public let files: [String]
+    }
+
     public let modules: [String]
     let files: Set<String>
+    public let testTargets: [TestTarget]
 
-    public init(modules: [String], files: Set<String>) {
+    public init(modules: [String], files: Set<String>, testTargets: [TestTarget] = []) {
         self.modules = modules
         self.files = Set(files.map(Self.normalise))
+        self.testTargets = testTargets
     }
 
     public func contains(_ path: String) -> Bool {
@@ -50,14 +58,16 @@ extension TestedScope {
         )
 
         var modules: [String] = []
+        var targets: [TestTarget] = []
         for target in testTargets {
             modules.append(moduleName(forTestTarget: target))
 
-            for list in fileLists[target] ?? [] {
-                for source in files(inSwiftFileList: list) {
-                    guard let text = try? String(contentsOfFile: source, encoding: .utf8) else { continue }
-                    modules.append(contentsOf: testableImports(in: text))
-                }
+            let sources = (fileLists[target] ?? []).flatMap { files(inSwiftFileList: $0) }
+            targets.append(TestTarget(name: target, files: sources.sorted()))
+
+            for source in sources {
+                guard let text = try? String(contentsOfFile: source, encoding: .utf8) else { continue }
+                modules.append(contentsOf: testableImports(in: text))
             }
         }
 
@@ -69,7 +79,44 @@ extension TestedScope {
             .flatMap { self.files(inSwiftFileList: $0) }
 
         guard !files.isEmpty else { return nil }
-        return TestedScope(modules: modules, files: Set(files))
+        return TestedScope(modules: modules, files: Set(files), testTargets: targets)
+    }
+
+    /// The test target a single process can run every test of, if there is one.
+    public var batchTarget: TestTarget? {
+        batchIneligibility == nil ? testTargets.first : nil
+    }
+
+    /// Why these tests cannot all run in one process, or nil when they can.
+    ///
+    /// The driver reruns Swift Testing inside the process; it cannot rerun
+    /// XCTest cases, and it cannot reach a second bundle, which xcodebuild
+    /// runs in a process of its own. Either way some tests would never run
+    /// with the mutant on, and a mutant only they would kill would be
+    /// reported as a survivor.
+    public var batchIneligibility: String? {
+        guard testTargets.count == 1, let target = testTargets.first, !target.files.isEmpty else {
+            return testTargets.count > 1
+                ? "the scheme runs \(testTargets.count) test bundles"
+                : "could not find the test sources"
+        }
+
+        var swiftTesting = false
+        for file in target.files {
+            guard let text = try? String(contentsOfFile: file, encoding: .utf8) else {
+                return "could not read \(URL(fileURLWithPath: file).lastPathComponent)"
+            }
+            if Self.declaresXCTestCase(in: text) {
+                return "\(target.name) has XCTest cases, which only a fresh process reruns"
+            }
+            if text.contains("import Testing") { swiftTesting = true }
+        }
+
+        return swiftTesting ? nil : "\(target.name) has no Swift Testing tests"
+    }
+
+    static func declaresXCTestCase(in source: String) -> Bool {
+        source.range(of: #":\s*XCTestCase\b"#, options: .regularExpression) != nil
     }
 
     /// Test target names from either `.xctestrun` layout.
