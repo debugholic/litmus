@@ -11,6 +11,7 @@ import SwiftSyntax
 public enum TokenOperator: String, CaseIterable, Sendable {
     case changeLogicalConnector = "ChangeLogicalConnector"
     case relationalOperatorReplacement = "RelationalOperatorReplacement"
+    case changeArithmeticOperator = "ChangeArithmeticOperator"
 
     /// What each token turns into.
     var replacements: [String: String] {
@@ -19,6 +20,10 @@ public enum TokenOperator: String, CaseIterable, Sendable {
             return ["&&": "||", "||": "&&"]
         case .relationalOperatorReplacement:
             return ["==": "!=", "!=": "==", ">=": "<", "<=": ">", "<": ">=", ">": "<="]
+        case .changeArithmeticOperator:
+            // Each stays in its own precedence group, so the unfolded sequence
+            // folds the same way with the swap in it.
+            return ["+": "-", "-": "+", "*": "/", "/": "*", "%": "*"]
         }
     }
 

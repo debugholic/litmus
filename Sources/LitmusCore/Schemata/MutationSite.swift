@@ -23,6 +23,10 @@ extension MutationSite {
         /// Drops a call whose result is discarded. If nothing fails, nothing
         /// was checking that the call happened.
         case removeStatement
+        /// `true` to `false`, or `false` to `true`.
+        case flipBoolean
+        /// A condition's expression to its negation.
+        case negateCondition
     }
 }
 

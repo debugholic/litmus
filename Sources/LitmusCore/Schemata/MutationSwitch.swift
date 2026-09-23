@@ -55,6 +55,42 @@ enum MutationSwitch {
             .with(\.trailingTrivia, sequence.trailingTrivia)
     }
 
+    /// `(flag ? (mutated) : (original))` around a single expression.
+    ///
+    /// For changes that are not about one element of a sequence: a literal,
+    /// or a whole condition.
+    static func replacing(
+        _ site: MutationSite,
+        original: ExprSyntax,
+        with mutated: ExprSyntax
+    ) -> ExprSyntax {
+        let bare = original.with(\.leadingTrivia, []).with(\.trailingTrivia, [])
+
+        return parenthesized(
+            ExprSyntax(
+                TernaryExprSyntax(
+                    condition: flag(site.id),
+                    questionMark: .infixQuestionMarkToken(leadingTrivia: .space, trailingTrivia: .space),
+                    thenExpression: parenthesized(mutated.with(\.leadingTrivia, []).with(\.trailingTrivia, [])),
+                    colon: .colonToken(leadingTrivia: .space, trailingTrivia: .space),
+                    elseExpression: parenthesized(bare)
+                )
+            )
+        )
+        .with(\.leadingTrivia, original.leadingTrivia)
+        .with(\.trailingTrivia, original.trailingTrivia)
+    }
+
+    /// `!(expression)`
+    static func negated(_ expression: ExprSyntax) -> ExprSyntax {
+        ExprSyntax(
+            PrefixOperatorExprSyntax(
+                operator: .prefixOperator("!"),
+                expression: parenthesized(expression.with(\.leadingTrivia, []).with(\.trailingTrivia, []))
+            )
+        )
+    }
+
     /// `if !flag { statement }`
     ///
     /// Guarding the statement costs one line. Copying the block to leave the
@@ -189,7 +225,7 @@ extension MutationSite.Mutation {
                 .with(\.leadingTrivia, elseExpression.leadingTrivia)
                 .with(\.trailingTrivia, elseExpression.trailingTrivia)
 
-        case .removeStatement:
+        case .removeStatement, .flipBoolean, .negateCondition:
             return nil
         }
 

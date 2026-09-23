@@ -73,6 +73,9 @@ struct MutationOperatorTests {
             "RelationalOperatorReplacement",
             "SwapTernary",
             "RemoveSideEffects",
+            "ChangeArithmeticOperator",
+            "FlipBooleanLiteral",
+            "NegateCondition",
         ])
     }
 }

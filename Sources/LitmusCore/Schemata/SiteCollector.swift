@@ -31,6 +31,12 @@ final class SiteCollector: SyntaxVisitor {
             return .visitChildren
         }
 
+        // `+` joins strings and arrays as well as numbers, and `-` does
+        // neither. A literal beside it settles which, without types.
+        if token == .changeArithmeticOperator, element.sequence.joinsCollections {
+            return .visitChildren
+        }
+
         record(
             node,
             at: node.operator.startLocation(converter: converter),
@@ -58,6 +64,41 @@ final class SiteCollector: SyntaxVisitor {
             on: SourceSpan(element.sequence),
             description: "swapped the branches of a ternary",
             mutation: .swapTernary(element: element.index)
+        )
+
+        return .visitChildren
+    }
+
+    // MARK: - boolean literals
+
+    override func visit(_ node: BooleanLiteralExprSyntax) -> SyntaxVisitorContinueKind {
+        guard `operator` == .flipBooleanLiteral, node.isRuntimeValue else { return .skipChildren }
+
+        let flipped = node.literal.tokenKind == .keyword(.true) ? "false" : "true"
+        record(
+            node,
+            at: node.startLocation(converter: converter),
+            on: SourceSpan(node),
+            description: "changed \(node.literal.text) to \(flipped)",
+            mutation: .flipBoolean
+        )
+
+        return .skipChildren
+    }
+
+    // MARK: - negated conditions
+
+    override func visit(_ node: ConditionElementSyntax) -> SyntaxVisitorContinueKind {
+        guard `operator` == .negateCondition, case .expression = node.condition else {
+            return .visitChildren
+        }
+
+        record(
+            node,
+            at: node.startLocation(converter: converter),
+            on: SourceSpan(node),
+            description: "negated the condition",
+            mutation: .negateCondition
         )
 
         return .visitChildren
@@ -126,6 +167,46 @@ final class SiteCollector: SyntaxVisitor {
         }
 
         return (sequence, index)
+    }
+}
+
+private extension SequenceExprSyntax {
+    /// Has a string, array or dictionary literal among its operands.
+    var joinsCollections: Bool {
+        elements.contains {
+            $0.is(StringLiteralExprSyntax.self)
+                || $0.is(ArrayExprSyntax.self)
+                || $0.is(DictionaryExprSyntax.self)
+        }
+    }
+}
+
+private extension BooleanLiteralExprSyntax {
+    /// A literal that is a value at run time, rather than something the
+    /// compiler reads.
+    ///
+    /// `#if true`, an attribute's argument and an enum's raw value have to
+    /// stay literals. A default argument can be read from a public function's
+    /// signature, where a file's private switch is out of reach. A pattern is
+    /// matched rather than evaluated.
+    var isRuntimeValue: Bool {
+        var current = parent
+        while let node = current {
+            if node.is(IfConfigClauseSyntax.self)
+                || node.is(AttributeSyntax.self)
+                || node.is(EnumCaseElementSyntax.self)
+                || node.is(FunctionParameterSyntax.self)
+                || node.is(EnumCaseParameterSyntax.self)
+                || node.is(ExpressionPatternSyntax.self)
+                || node.is(MacroExpansionExprSyntax.self) {
+                return false
+            }
+            if node.is(CodeBlockSyntax.self) || node.is(MemberBlockSyntax.self) {
+                return true
+            }
+            current = node.parent
+        }
+        return true
     }
 }
 

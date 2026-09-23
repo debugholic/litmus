@@ -30,6 +30,41 @@ private final class Rewriter: SyntaxRewriter {
         return MutationSwitch.expression(found, around: base)
     }
 
+    override func visit(_ node: BooleanLiteralExprSyntax) -> ExprSyntax {
+        let span = SourceSpan(node)
+        let base = super.visit(node)
+
+        guard
+            let site = sites[span]?.first,
+            case .flipBoolean = site.mutation,
+            let literal = base.as(BooleanLiteralExprSyntax.self)
+        else { return base }
+
+        let flipped = literal.with(
+            \.literal,
+            .keyword(literal.literal.tokenKind == .keyword(.true) ? .false : .true)
+        )
+        return MutationSwitch.replacing(site, original: base, with: ExprSyntax(flipped))
+    }
+
+    override func visit(_ node: ConditionElementSyntax) -> ConditionElementSyntax {
+        let span = SourceSpan(node)
+        let base = super.visit(node)
+
+        guard
+            let site = sites[span]?.first,
+            case .negateCondition = site.mutation,
+            case let .expression(expression) = base.condition
+        else { return base }
+
+        let switched = MutationSwitch.replacing(
+            site,
+            original: expression,
+            with: MutationSwitch.negated(expression)
+        )
+        return base.with(\.condition, .expression(switched))
+    }
+
     override func visit(_ node: CodeBlockItemSyntax) -> CodeBlockItemSyntax {
         let span = SourceSpan(node)
         let base = super.visit(node)
