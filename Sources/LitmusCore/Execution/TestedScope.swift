@@ -75,7 +75,7 @@ extension TestedScope {
         for target in testTargets {
             modules.append(moduleName(forTestTarget: target))
 
-            let sources = (fileLists[target] ?? []).flatMap { files(inSwiftFileList: $0) }
+            let sources = (fileLists[target] ?? []).flatMap { self.files(inSwiftFileList: $0) }
             targets.append(TestTarget(name: target, files: sources.sorted()))
 
             for source in sources {
