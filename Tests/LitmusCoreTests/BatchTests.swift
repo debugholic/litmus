@@ -44,6 +44,7 @@ struct BatchTests {
                        if [ -n "$TEST_RUNNER_LITMUS_PROBE_DIR" ]; then
                          echo "START ~probe" >> "$out"
                          grep -q dyingprobe "$batch" && exit 1
+                         echo "REACHED Static_1" >> "$out"
                          echo "END ~probe survived 0.1" >> "$out"
                        fi ;;
                     uncovered*) echo "END $id nocoverage 0" >> "$out" ;;
@@ -252,6 +253,7 @@ struct BatchTests {
         #expect(runner.probes.count == 1)
         #expect(runner.probes.first != "none")
         #expect(events.contains(.finished(Batch.probe, .survived, 0.1)))
+        #expect(events.contains(.reached("Static_1")))
     }
 
     /// A probe that dies is not a mutant's doing; nothing should be scored
@@ -267,6 +269,11 @@ struct BatchTests {
         #expect(verdicts[Batch.probe] == nil)
         #expect(runner.probes.count == 2)
         #expect(runner.probes.last == "none")
+    }
+
+    @Test("reads a switch the tests passed through from the driver's report")
+    func parseReached() {
+        #expect(Batch.Report.parse("REACHED A_B_1_2_3") == .reached("A_B_1_2_3"))
     }
 
     @Test("reads a mutant no test reaches from the driver's report")

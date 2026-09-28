@@ -20,6 +20,9 @@ public enum Batch {
     public enum Event: Sendable, Equatable {
         case started(String)
         case finished(String, Verdict, TimeInterval)
+        /// A mutant switch the tests passed through at least once, from the
+        /// process's start to the end of the probe.
+        case reached(String)
     }
 
     /// How long to wait before deciding a launch or a mutant is stuck.
@@ -57,6 +60,9 @@ public enum Batch {
     /// The step after the baseline that runs each test alone to see which
     /// mutants it reaches.
     public static let probe = "~probe"
+    /// The probe file switches go to from the moment the test process starts,
+    /// before any test is singled out.
+    static let launchProbe = "launch.probe"
     /// The first line of the driver, so the tests' own code can be told apart.
     static let driverMarker = "// ─── Added by litmus to its working copy."
 
@@ -123,6 +129,9 @@ public enum Batch {
                         record("START \(probe)")
                         let probed = Date()
                         reaching = await Self.probe(in: probeDirectory, run: run)
+                        for id in Self.reached(in: probeDirectory) {
+                            record("REACHED \\(id)")
+                        }
                         record("END \(probe) survived \\(Date().timeIntervalSince(probed))")
                     }
                     continue
@@ -207,6 +216,19 @@ public enum Batch {
             return reaching
         }
 
+        /// Every switch noted in any probe file, the one kept from launch
+        /// included. A value Swift computes once is read before the probe, by
+        /// the baseline or by whatever runs first, and only that file sees it.
+        private static func reached(in directory: String) -> Set<String> {
+            let files = (try? FileManager.default.contentsOfDirectory(atPath: directory)) ?? []
+            var ids: Set<String> = []
+            for file in files where file.hasSuffix(".probe") {
+                let text = (try? String(contentsOfFile: directory + "/" + file, encoding: .utf8)) ?? ""
+                ids.formUnion(text.split(separator: "\\n").map(String.init))
+            }
+            return ids
+        }
+
         private static func readMap(in directory: String) -> [String: [String]]? {
             guard let text = try? String(contentsOfFile: directory + "/map.tsv", encoding: .utf8) else { return nil }
             var reaching: [String: [String]] = [:]
@@ -278,6 +300,10 @@ extension Batch {
 
             if words.count == 2, words[0] == "START" {
                 return .started(words[1])
+            }
+
+            if words.count == 2, words[0] == "REACHED" {
+                return .reached(words[1])
             }
 
             if words.count == 4, words[0] == "END", let duration = TimeInterval(words[3]) {
