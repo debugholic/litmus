@@ -394,7 +394,7 @@ public struct MutationRun: Sendable {
         progress(.checkingBaseline)
 
         let outcomes = try await withThrowingTaskGroup(
-            of: (verdicts: [String: Verdict], durations: [String: TimeInterval]).self
+            of: (verdicts: [String: Verdict], durations: [String: TimeInterval], reached: Set<String>?).self
         ) { group in
             for (index, lane) in lanes.enumerated() {
                 let ids = (index == 0 ? [Batch.baseline] : []) + shares[index]
@@ -402,6 +402,8 @@ public struct MutationRun: Sendable {
 
                 group.addTask {
                     var durations: [String: TimeInterval] = [:]
+                    var reached: Set<String> = []
+                    var probed = false
                     let verdicts = try harness.runBatch(
                         plan, target: target, lane: lane, ids: ids, timeouts: Batch.Timeouts()
                     ) { event in
@@ -410,8 +412,11 @@ public struct MutationRun: Sendable {
                             break
                         case .started(Batch.probe):
                             progress(.probing)
-                        case let .finished(Batch.probe, _, duration):
+                        case let .finished(Batch.probe, verdict, duration):
+                            probed = verdict == .survived
                             progress(.probed(duration))
+                        case let .reached(id):
+                            reached.insert(id)
                         case let .finished(Batch.baseline, verdict, duration):
                             if verdict == .survived { progress(.baselinePassed(duration)) }
                         case let .started(id):
@@ -423,17 +428,21 @@ public struct MutationRun: Sendable {
                             progress(.finished(result, done: tally.next(), of: tally.total))
                         }
                     }
-                    return (verdicts, durations)
+                    // Only a probe that finished has seen every switch the
+                    // tests pass through.
+                    return (verdicts, durations, probed ? reached : nil)
                 }
             }
 
             var verdicts: [String: Verdict] = [:]
             var durations: [String: TimeInterval] = [:]
+            var reached: Set<String>?
             for try await outcome in group {
                 verdicts.merge(outcome.verdicts) { _, new in new }
                 durations.merge(outcome.durations) { _, new in new }
+                if let seen = outcome.reached { reached = (reached ?? []).union(seen) }
             }
-            return (verdicts: verdicts, durations: durations)
+            return (verdicts: verdicts, durations: durations, reached: reached)
         }
 
         let baseline = outcomes.verdicts[Batch.baseline] ?? .error
@@ -449,16 +458,27 @@ public struct MutationRun: Sendable {
             )
         }
 
-        if !alone.isEmpty { progress(.evaluatedOnce(alone.count)) }
+        // A process of its own is a launch, half a minute on a simulator. One
+        // the tests never read, from launch to the end of the probe, would
+        // survive it, and needs none.
+        let unreached = outcomes.reached.map { seen in alone.filter { !seen.contains($0.switchName) } } ?? []
+        let skipped = unreached.map { mutant in
+            let result = MutantResult(mutant: mutant, verdict: .noCoverage, duration: 0)
+            progress(.finished(result, done: tally.next(), of: tally.total))
+            return result
+        }
+        let launched = alone.filter { mutant in !unreached.contains { $0 == mutant } }
+
+        if !launched.isEmpty { progress(.evaluatedOnce(launched.count)) }
 
         // The batch's baseline ran inside a process that was already up, so it
         // says nothing about how long a launch takes; the default allows one.
         let separate = try await runEach(
-            alone, built: plan.built, onlyTesting: target,
+            launched, built: plan.built, onlyTesting: target,
             timeout: Batch.Timeouts().mutant, tally: tally
         )
 
-        return results + separate
+        return results + skipped + separate
     }
 
     /// One fresh process per mutant, one in flight per lane.

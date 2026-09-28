@@ -127,6 +127,10 @@ extension Xcodebuild: BatchingHarness {
         ]
         if let probeDirectory {
             environment["TEST_RUNNER_\(Batch.probeDirectoryVariable)"] = probeDirectory.path
+            // Noted from the start, so a value Swift computes once is seen
+            // even when the baseline is what first reads it.
+            environment["TEST_RUNNER_\(MutationSwitch.probeVariable)"] = probeDirectory
+                .appendingPathComponent(Batch.launchProbe).path
         }
         process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
 
@@ -165,6 +169,8 @@ extension Xcodebuild: BatchingHarness {
                     if id == Batch.baseline, verdict == .survived {
                         timeouts.learn(baseline: duration)
                     }
+                case .reached:
+                    break
                 }
             }
         }

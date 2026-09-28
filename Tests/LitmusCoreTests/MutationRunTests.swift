@@ -269,16 +269,24 @@ struct MutationRunTests {
         /// Keyed by target, then switch name; anything missing survives.
         let kills: [String: Set<String>]
         let redBaselines: Set<String>
+        /// Switches a finished probe reports reached, or nil for no probe.
+        let reached: Set<String>?
 
         private let lock = NSLock()
         private(set) var batched: [String: [String]] = [:]
         private(set) var separate: [String: [String]] = [:]
         private(set) var prepared: [String] = []
 
-        init(targets: [TestedScope.TestTarget], kills: [String: Set<String>] = [:], redBaselines: Set<String> = []) {
+        init(
+            targets: [TestedScope.TestTarget],
+            kills: [String: Set<String>] = [:],
+            redBaselines: Set<String> = [],
+            reached: Set<String>? = nil
+        ) {
             self.targets = targets
             self.kills = kills
             self.redBaselines = redBaselines
+            self.reached = reached
         }
 
         func build(lane: String) throws -> BuiltTests { BuiltTests() }
@@ -326,6 +334,12 @@ struct MutationRunTests {
             defer { lock.unlock() }
             batched[target, default: []].append(contentsOf: ids)
 
+            if let reached, ids.contains(Batch.baseline) {
+                onEvent(.started(Batch.probe))
+                reached.forEach { onEvent(.reached($0)) }
+                onEvent(.finished(Batch.probe, .survived, 0.1))
+            }
+
             return Dictionary(uniqueKeysWithValues: ids.map { id in
                 if id == Batch.baseline {
                     return (id, redBaselines.contains(target) ? .killed : .survived)
@@ -370,6 +384,25 @@ struct MutationRunTests {
         #expect(harness.separate["ATests"] == [once.switchName])
         #expect(harness.batched["ATests"] == [Batch.baseline] + others.map(\.switchName))
         #expect(summary.results.count == 3)
+    }
+
+    /// A launch each is half a minute on a simulator. A value the tests never
+    /// read, from launch to the end of the probe, would survive it anyway.
+    @Test("gives no process to a value computed once that no test reads")
+    func unreachedEvaluatedOnce() async throws {
+        let source = try TestSource()
+        let read = mutant(1, in: "/project/A.swift", once: true)
+        let unread = mutant(2, in: "/project/A.swift", once: true)
+        let harness = TargetStub(
+            targets: [.init(name: "ATests", files: [source.url.path], aimedAt: ["/project/A.swift"])],
+            reached: [read.switchName]
+        )
+
+        let summary = try await MutationRun(configuration: .init(harness: harness, lanes: ["a"]))([read, unread])
+
+        #expect(harness.separate["ATests"] == [read.switchName])
+        #expect(summary.results.first { $0.mutant == unread }?.verdict == .noCoverage)
+        #expect(summary.results.count == 2)
     }
 
     @Test("runs each mutant in the target aimed at its file")
