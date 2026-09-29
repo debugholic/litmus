@@ -12,7 +12,10 @@ public enum GitDiff {
         // --merge-base answers "what does this branch add", which is what a
         // review looks at, and it reaches the working tree so uncommitted work
         // counts too.
+        // quotePath off: git otherwise writes a Korean path as octal escapes
+        // in quotes, and not one of that file's lines matched.
         process.arguments = [
+            "-c", "core.quotePath=false",
             "diff", "--unified=0", "--merge-base", ref, "--", "*.swift",
         ]
         process.currentDirectoryURL = project
@@ -40,7 +43,7 @@ public enum GitDiff {
 
         for line in diff.split(separator: "\n", omittingEmptySubsequences: true) {
             if line.hasPrefix("+++ ") {
-                let path = String(line.dropFirst(4))
+                let path = Self.path(line.dropFirst(4))
                 // /dev/null is a deletion: there is nothing left to mutate.
                 file = path == "/dev/null" ? nil : String(path.dropFirst(2))
                 continue
@@ -56,6 +59,38 @@ public enum GitDiff {
         }
 
         return ChangedLines(lines: lines)
+    }
+
+    /// The path a `+++` line names. Git ends one with a space in it with a
+    /// tab, and puts one it will not write plainly in quotes with C escapes —
+    /// octal bytes for anything outside ASCII when `core.quotePath` is on.
+    static func path(_ text: Substring) -> String {
+        var text = text
+        if text.hasSuffix("\t") { text = text.dropLast() }
+        guard text.count >= 2, text.hasPrefix("\""), text.hasSuffix("\"") else { return String(text) }
+
+        var bytes: [UInt8] = []
+        var characters = Array(text.dropFirst().dropLast().utf8)[...]
+        while let byte = characters.popFirst() {
+            guard byte == UInt8(ascii: "\\"), let next = characters.popFirst() else {
+                bytes.append(byte)
+                continue
+            }
+            switch next {
+            case UInt8(ascii: "n"): bytes.append(0x0A)
+            case UInt8(ascii: "t"): bytes.append(0x09)
+            case UInt8(ascii: "0")...UInt8(ascii: "7"):
+                var value = Int(next - UInt8(ascii: "0"))
+                for _ in 0..<2 {
+                    guard let digit = characters.first, (UInt8(ascii: "0")...UInt8(ascii: "7")).contains(digit) else { break }
+                    value = value * 8 + Int(digit - UInt8(ascii: "0"))
+                    characters.removeFirst()
+                }
+                bytes.append(UInt8(truncatingIfNeeded: value))
+            default: bytes.append(next)
+            }
+        }
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     private static func hunk(_ line: Substring) -> Range<Int>? {
