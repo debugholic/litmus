@@ -35,11 +35,24 @@ public struct TestedScope: Sendable, Equatable {
     public let modules: [String]
     let files: Set<String>
     public let testTargets: [TestTarget]
+    /// The module each file was compiled into, by normalised path.
+    let moduleOf: [String: String]
 
-    public init(modules: [String], files: Set<String>, testTargets: [TestTarget] = []) {
+    public init(
+        modules: [String],
+        files: Set<String>,
+        testTargets: [TestTarget] = [],
+        moduleOf: [String: String] = [:]
+    ) {
         self.modules = modules
         self.files = Set(files.map(Self.normalise))
         self.testTargets = testTargets
+        self.moduleOf = Dictionary(moduleOf.map { (Self.normalise($0.key), $0.value) }) { first, _ in first }
+    }
+
+    /// The module a file was compiled into, when the build said.
+    public func module(of path: String) -> String? {
+        moduleOf[Self.normalise(path)]
     }
 
     public func contains(_ path: String) -> Bool {
@@ -111,12 +124,14 @@ extension TestedScope {
         var seen: Set<String> = []
         modules = modules.filter { seen.insert($0).inserted }
 
-        let files = modules
-            .flatMap { fileLists[$0] ?? [] }
-            .flatMap { self.files(inSwiftFileList: $0) }
+        var moduleOf: [String: String] = [:]
+        for module in modules {
+            for file in sources(ofModule: module) where moduleOf[file] == nil { moduleOf[file] = module }
+        }
+        let files = Array(moduleOf.keys)
 
         guard !files.isEmpty else { return nil }
-        return TestedScope(modules: modules, files: Set(files), testTargets: targets)
+        return TestedScope(modules: modules, files: Set(files), testTargets: targets, moduleOf: moduleOf)
     }
 
     /// Why a test target's tests cannot all run in one process, or nil
@@ -245,7 +260,8 @@ extension TestedScope {
             files: Set(files.map(move)),
             testTargets: testTargets.map {
                 TestTarget(name: $0.name, files: $0.files.map(move), aimedAt: Set($0.aimedAt.map(move)))
-            }
+            },
+            moduleOf: Dictionary(moduleOf.map { (move($0.key), $0.value) }) { first, _ in first }
         )
     }
 

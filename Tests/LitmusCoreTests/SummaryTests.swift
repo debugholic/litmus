@@ -89,4 +89,63 @@ struct SummaryScoreTests {
         #expect(MutationRun.Summary.commonDirectory(of: ["/p/A/x.swift", "/p/A/y.swift"]) == "/p/A/")
         #expect(MutationRun.Summary.commonDirectory(of: []) == "")
     }
+
+    private func result(_ verdict: Verdict, at path: String) -> MutantResult {
+        MutantResult(
+            mutant: Mutant(
+                filePath: path, line: 1, column: 1, utf8Offset: 0,
+                operator: "ChangeLogicalConnector", description: "changed && to ||"
+            ),
+            verdict: verdict,
+            duration: 0
+        )
+    }
+
+    @Test("scores each module when the build named more than one")
+    func areasByModule() {
+        var run = MutationRun.Summary(results: [
+            result(.killed, at: "/p/Features/Login/Sources/A.swift"),
+            result(.survived, at: "/p/Features/Login/Sources/B.swift"),
+            result(.survived, at: "/p/Core/Network/Sources/C.swift"),
+        ], duration: 0)
+        run.modules = [
+            "/p/Features/Login/Sources/A.swift": "FeatureLogin",
+            "/p/Features/Login/Sources/B.swift": "FeatureLogin",
+            "/p/Core/Network/Sources/C.swift": "CoreNetwork",
+        ]
+
+        #expect(run.areasAreModules)
+        #expect(run.areas.map(\.name) == ["CoreNetwork", "FeatureLogin"])
+        #expect(run.areas.map(\.score) == [0, 50])
+    }
+
+    /// One row for one module says nothing; its folders do.
+    @Test("scores each top-level folder when everything is one module")
+    func areasByFolder() {
+        var run = MutationRun.Summary(results: [
+            result(.killed, at: "/p/Sources/Domain/A.swift"),
+            result(.noCoverage, at: "/p/Sources/Feature/B.swift"),
+            result(.survived, at: "/p/Sources/Feature/C.swift"),
+            result(.killed, at: "/p/Sources/Root.swift"),
+        ], duration: 0)
+        run.modules = Dictionary(uniqueKeysWithValues: run.results.map { ($0.mutant.filePath, "App") })
+
+        #expect(!run.areasAreModules)
+        #expect(Set(run.areas.map(\.name)) == ["Domain", "Feature", "(root)"])
+        #expect(run.areas.first?.name == "Feature")
+    }
+
+    @Test("plain report puts the area table above the file table")
+    func plainAreas() throws {
+        let run = MutationRun.Summary(results: [
+            result(.killed, at: "/p/Sources/Domain/A.swift"),
+            result(.survived, at: "/p/Sources/Feature/B.swift"),
+        ], duration: 0)
+        let rendered = try Report(run).rendered(as: .plain)
+
+        #expect(rendered.contains("by folder, weakest first:"))
+        let area = try #require(rendered.range(of: "by folder"))
+        let file = try #require(rendered.range(of: "by file"))
+        #expect(area.lowerBound < file.lowerBound)
+    }
 }

@@ -183,4 +183,17 @@ struct TestedScopeTests {
             derivedData: build.derivedData
         ) == nil)
     }
+
+    @Test("knows the module each file was compiled into, and keeps it when rebased")
+    func moduleOfFile() {
+        let scope = TestedScope(
+            modules: ["App"], files: ["/orig/Sources/A.swift"],
+            moduleOf: ["/orig/Sources/A.swift": "App"]
+        )
+        let moved = scope.rebased(from: URL(fileURLWithPath: "/orig"), to: URL(fileURLWithPath: "/copy"))
+
+        #expect(scope.module(of: "/orig/Sources/A.swift") == "App")
+        #expect(moved.module(of: "/copy/Sources/A.swift") == "App")
+        #expect(moved.module(of: "/copy/Sources/B.swift") == nil)
+    }
 }

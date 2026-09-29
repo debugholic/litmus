@@ -86,6 +86,22 @@ public struct StrykerReport: Sendable {
         <p class="counts">caught \(caught) · survived \(summary.survived) · no test reaches \(summary.noCoverage)\(summary.unviable > 0 ? " · did not build \(summary.unviable)" : "")</p>
         """)
 
+        let areas = summary.areas
+        if areas.count > 1 {
+            let rows = areas.map { area in
+                let score = area.score.map { "\(Int($0.rounded()))%" } ?? "—"
+                return """
+                <tr><td>\(Self.escape(area.name))</td><td class="num">\(score)</td><td class="num">\(area.count(.killed) + area.count(.timedOut))</td>\
+                <td class="num">\(area.count(.survived))</td><td class="num">\(area.count(.noCoverage))</td></tr>
+                """
+            }.joined(separator: "\n")
+            parts.append("""
+            <h2>By \(summary.areasAreModules ? "module" : "folder") <small>weakest first</small></h2>
+            <table class="areas"><thead><tr><th></th><th>score</th><th>caught</th><th>survived</th><th>no test reaches</th></tr></thead>
+            <tbody>\(rows)</tbody></table>
+            """)
+        }
+
         if !plan.unchecked.isEmpty {
             var rows: [String] = []
             for group in plan.groups {
@@ -197,6 +213,10 @@ public struct StrykerReport: Sendable {
     .litmus .tests { color: var(--muted); margin: 0; }
     .litmus a { color: inherit; }
     .litmus details summary { cursor: pointer; color: var(--muted); }
+    .litmus table.areas { border-collapse: collapse; }
+    .litmus table.areas th, .litmus table.areas td { padding: 2px 16px 2px 0; text-align: left; }
+    .litmus table.areas th { color: var(--muted); font-weight: normal; }
+    .litmus table.areas td.num, .litmus table.areas th:not(:first-child) { text-align: right; }
     </style>
     """
 

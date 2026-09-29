@@ -64,6 +64,9 @@ public struct MutationRun: Sendable {
     public struct Summary: Sendable {
         public let results: [MutantResult]
         public let duration: TimeInterval
+        /// The module each mutated file was compiled into, when the build
+        /// said; see `areas`.
+        public var modules: [String: String] = [:]
 
         public var killed: Int { results.count { $0.verdict == .killed } }
         public var survived: Int { results.count { $0.verdict == .survived } }
@@ -130,6 +133,31 @@ public struct MutationRun: Sendable {
             return Double(caught) / Double(scored) * 100
         }
 
+        /// A score for each module, or, when everything is in one, for each
+        /// top-level folder under the files' common root: one row for one
+        /// module says nothing a second time. Weakest first, those with no
+        /// score last.
+        /// Whether `areas` are modules rather than folders.
+        public var areasAreModules: Bool {
+            Set(results.compactMap { modules[$0.mutant.filePath] }).count > 1
+        }
+
+        public var areas: [AreaScore] {
+            let named = Set(results.compactMap { modules[$0.mutant.filePath] })
+            let root = Self.commonDirectory(of: results.map(\.mutant.filePath))
+
+            func area(of result: MutantResult) -> String {
+                if named.count > 1, let module = modules[result.mutant.filePath] { return module }
+                let relative = root.isEmpty ? result.mutant.filePath : String(result.mutant.filePath.dropFirst(root.count))
+                let parts = relative.split(separator: "/")
+                return parts.count > 1 ? String(parts[0]) : "(root)"
+            }
+
+            return Dictionary(grouping: results, by: area)
+                .map { AreaScore(name: $0.key, results: $0.value) }
+                .sorted { ($0.score ?? 101, $0.name) < ($1.score ?? 101, $1.name) }
+        }
+
         /// Every test that reached a mutant, costliest first.
         public var tests: [TestScore] {
             var byID: [String: (test: TestRef, reached: Int, killed: Int)] = [:]
@@ -171,6 +199,15 @@ public struct MutationRun: Sendable {
         /// What the test costs the run: its time once for every mutant it
         /// reaches.
         public var cost: TimeInterval? { test.duration.map { $0 * Double(reached) } }
+    }
+
+    /// A module, or a top-level folder, and its mutants.
+    public struct AreaScore: Sendable {
+        public let name: String
+        public let results: [MutantResult]
+
+        public var score: Double? { Summary.score(results) }
+        public func count(_ verdict: Verdict) -> Int { results.count { $0.verdict == verdict } }
     }
 
     public struct FileScore: Sendable {
@@ -264,7 +301,13 @@ public struct MutationRun: Sendable {
             results = try await runWholeSuite(mutants, built: built)
         }
 
-        return Summary(results: rejected + results, duration: Date().timeIntervalSince(started))
+        var summary = Summary(results: rejected + results, duration: Date().timeIntervalSince(started))
+        if let scope {
+            for path in Set(summary.results.map(\.mutant.filePath)) {
+                summary.modules[path] = scope.module(of: path)
+            }
+        }
+        return summary
     }
 
     /// Builds, taking out whatever the compiler rejects until the rest builds.

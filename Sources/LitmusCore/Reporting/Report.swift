@@ -60,6 +60,20 @@ public struct Report: Sendable {
 
         // One file says nothing a second time; several are where the weak one
         // hides behind the average.
+        // A table for the whole before one per file: which module, or which
+        // part of a single module, the tests leave alone.
+        let areas = summary.areas
+        if areas.count > 1 {
+            let width = areas.map(\.name.count).max() ?? 0
+            lines.append("")
+            lines.append("by \(summary.areasAreModules ? "module" : "folder"), weakest first:")
+            for area in areas {
+                let score = area.score.map(percent) ?? "—"
+                let padded = area.name.padding(toLength: width, withPad: " ", startingAt: 0)
+                lines.append("  \(String(repeating: " ", count: max(0, 4 - score.count)))\(score)  \(padded)  \(counts(area.results))")
+            }
+        }
+
         // Only files with a score: a file the tests never reach says nothing
         // here, and one project listed 112 of them. They are counted below.
         let files = summary.files
@@ -208,6 +222,19 @@ public struct Report: Sendable {
                     "timeout": file.count(.timedOut),
                     "unviable": file.count(.unviable),
                     "error": file.count(.error),
+                ] as [String: Any]
+            },
+            "areas": summary.areas.map { area in
+                [
+                    "name": area.name,
+                    "kind": summary.areasAreModules ? "module" : "folder",
+                    "score": area.score as Any,
+                    "killed": area.count(.killed),
+                    "survived": area.count(.survived),
+                    "timeout": area.count(.timedOut),
+                    "noCoverage": area.count(.noCoverage),
+                    "unviable": area.count(.unviable),
+                    "error": area.count(.error),
                 ] as [String: Any]
             },
             "tests": summary.tests.map { score in
