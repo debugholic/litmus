@@ -74,15 +74,23 @@ public struct Report: Sendable {
 
         lines += slowest()
 
-        let gaps = FunctionGap.find(in: summary.results)
-        guard !gaps.isEmpty else { return lines.joined(separator: "\n") }
+        let plan = TestPlan(summary.results)
+        lines += unchecked(plan)
+        lines += unreached(plan)
 
-        let untested = gaps.count { $0.status == .untested }
-        lines.append("")
-        lines.append("what to test — \(untested) untested, \(gaps.count - untested) partly tested:")
+        return lines.joined(separator: "\n")
+    }
+
+    /// Functions a test runs through without noticing the change, each
+    /// survivor in full: the tests are there, and a check is what is missing.
+    private func unchecked(_ plan: TestPlan) -> [String] {
+        guard !plan.unchecked.isEmpty else { return [] }
+
+        let untested = plan.unchecked.count { $0.status == .untested }
+        var lines = ["", "what to test — \(untested) untested, \(plan.unchecked.count - untested) partly tested:"]
 
         let kindWidth = GapKind.allCases.map(\.rawValue.count).max() ?? 0
-        for gap in gaps {
+        for gap in plan.unchecked {
             lines.append("")
             lines.append("\(gap.status.rawValue.padding(toLength: 9, withPad: " ", startingAt: 0))"
                 + "\(gap.name)  \(gap.caught) of \(gap.scored) caught")
@@ -96,13 +104,37 @@ public struct Report: Sendable {
                 lines.append("  \(line)")
             }
             for survivor in gap.survivors {
-                let mutant = survivor.mutant
                 let kind = survivor.gapKind.rawValue.padding(toLength: kindWidth, withPad: " ", startingAt: 0)
-                lines.append("  \(location(of: survivor))  \(kind)  \(Self.what(mutant))")
+                lines.append("  \(location(of: survivor))  \(kind)  \(Self.what(survivor.mutant))")
+            }
+            if let more = plan.unreachedIn[gap.name], more > 0 {
+                lines.append("  and \(more) more in it no test reaches")
             }
         }
+        return lines
+    }
 
-        return lines.joined(separator: "\n")
+    /// Code no test runs, counted by file: listed mutant by mutant it was
+    /// thousands of lines that all said the same thing.
+    private func unreached(_ plan: TestPlan) -> [String] {
+        guard !plan.unreached.isEmpty else { return [] }
+
+        let root = MutationRun.Summary.commonDirectory(of: summary.results.map(\.mutant.filePath))
+        let shown = plan.unreached.prefix(10)
+        let width = String(shown.first?.count ?? 0).count
+
+        var lines = [
+            "",
+            "no test reaches — \(plan.unreachedTotal) mutant(s) in \(plan.unreached.count) file(s), most first:",
+        ]
+        for file in shown {
+            let path = root.isEmpty ? file.path : String(file.path.dropFirst(root.count))
+            lines.append("  \(String(repeating: " ", count: max(0, width - String(file.count).count)))\(file.count)  \(path)")
+        }
+        if plan.unreached.count > shown.count {
+            lines.append("  and \(plan.unreached.count - shown.count) more file(s)")
+        }
+        return lines
     }
 
     /// The five tests that cost the run most, when the probe timed them.

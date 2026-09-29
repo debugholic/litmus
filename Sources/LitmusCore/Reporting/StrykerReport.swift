@@ -45,8 +45,10 @@ public struct StrykerReport: Sendable {
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>Litmus report</title>
         <script src="\(Self.viewer)"></script>
+        \(Self.frontStyle)
         </head>
         <body>
+        \(front())
         <mutation-test-report-app title-postfix="Litmus"></mutation-test-report-app>
         <script>
         document.querySelector("mutation-test-report-app").report = \(embedded);
@@ -56,6 +58,130 @@ public struct StrykerReport: Sendable {
 
         """
     }
+
+    // MARK: - what to read first
+
+    /// Above the viewer: the two scores, what to test, and what makes the run
+    /// slow. The viewer is a file tree; it does not say where to start, and
+    /// its bar of counts runs its numbers together when one kind is most of
+    /// the run.
+    func front() -> String {
+        let plan = TestPlan(summary.results)
+        let caught = summary.killed + summary.timedOut
+        var parts: [String] = []
+
+        // Scores, and a bar of only what the tests reach.
+        let strength = summary.testStrength.map { "\(Int($0.rounded()))%" } ?? "—"
+        let whole = summary.mutationScore.map { "\(Int($0.rounded()))%" } ?? "—"
+        let reached = caught + summary.survived
+        let share = reached > 0 ? Double(caught) / Double(reached) * 100 : 0
+        parts.append("""
+        <section class="scores">
+        <div><b>\(strength)</b><span>test strength</span><small>caught \(caught) of the \(reached) mutants the tests reach</small></div>
+        <div><b>\(whole)</b><span>mutation score</span><small>caught \(caught) of all \(caught + summary.survived + summary.noCoverage)</small></div>
+        </section>
+        <div class="bar" title="caught \(caught), survived \(summary.survived)"><i style="width: \(String(format: "%.1f", share))%"></i></div>
+        <p class="counts">caught \(caught) · survived \(summary.survived) · no test reaches \(summary.noCoverage)\(summary.unviable > 0 ? " · did not build \(summary.unviable)" : "")</p>
+        """)
+
+        if !plan.unchecked.isEmpty {
+            var rows: [String] = []
+            for gap in plan.unchecked {
+                var passing: [TestRef] = []
+                for test in gap.survivors.flatMap(\.coveredBy) where !passing.contains(test) { passing.append(test) }
+                let passedBy = passing.isEmpty ? "" : """
+                <p class="tests">passed by \(passing.prefix(3).map { Self.escape($0.name) }.joined(separator: ", "))\(passing.count > 3 ? " and \(passing.count - 3) more" : "")</p>
+                """
+                let survivors = gap.survivors.map { survivor in
+                    """
+                    <li><a href="#mutant/\(Self.escape(relative(survivor.mutant.filePath)))">\(Self.escape(survivor.mutant.fileName)):\(survivor.mutant.line)</a> \
+                    <em>\(survivor.gapKind.rawValue)</em> <code>\(Self.escape(Report.what(survivor.mutant)))</code> \
+                    <small>\(survivor.gapKind.hint)</small></li>
+                    """
+                }.joined(separator: "\n")
+                let more = (plan.unreachedIn[gap.name] ?? 0) > 0
+                    ? "<p class=\"tests\">and \(plan.unreachedIn[gap.name] ?? 0) more in it no test reaches</p>" : ""
+                rows.append("""
+                <article><h3><span class="\(gap.status == .untested ? "untested" : "partial")">\(gap.status.rawValue)</span> \
+                \(Self.escape(gap.name)) <small>\(gap.caught) of \(gap.scored) caught</small></h3>
+                \(passedBy)<ul>\(survivors)</ul>\(more)</article>
+                """)
+            }
+            parts.append("""
+            <h2>What to test <small>tests run through these and do not notice the change</small></h2>
+            \(rows.joined(separator: "\n"))
+            """)
+        }
+
+        if !plan.unreached.isEmpty {
+            let row = { (file: (path: String, count: Int)) in
+                "<li><b>\(file.count)</b> <a href=\"#mutant/\(Self.escape(self.relative(file.path)))\">\(Self.escape(self.relative(file.path)))</a></li>"
+            }
+            let shown = plan.unreached.prefix(10).map(row).joined(separator: "\n")
+            let rest = plan.unreached.dropFirst(10)
+            let more = rest.isEmpty ? "" : """
+            <details><summary>\(rest.count) more file(s)</summary><ul class="files">\(rest.map(row).joined(separator: "\n"))</ul></details>
+            """
+            parts.append("""
+            <h2>No test reaches <small>\(plan.unreachedTotal) mutant(s) in \(plan.unreached.count) file(s)</small></h2>
+            <ul class="files">\(shown)</ul>\(more)
+            """)
+        }
+
+        let costly = summary.tests.filter { $0.cost != nil }.prefix(5)
+        if !costly.isEmpty {
+            let rows = costly.map { score in
+                let cost = String(format: "%.1fs", score.cost ?? 0)
+                let each = String(format: "%.1fs", score.test.duration ?? 0)
+                return "<li><b>\(cost)</b> \(each) × \(score.reached) \(Self.escape(score.test.name))</li>"
+            }.joined(separator: "\n")
+            parts.append("""
+            <h2>Slowest tests <small>each runs once for every mutant it reaches</small></h2>
+            <ul class="files">\(rows)</ul>
+            """)
+        }
+
+        return "<header class=\"litmus\">\n\(parts.joined(separator: "\n"))\n</header>"
+    }
+
+    private static func escape(_ text: String) -> String {
+        text.replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+    }
+
+    static let frontStyle = """
+    <style>
+    .litmus { --fg: #1f2328; --muted: #656d76; --line: #d0d7de; --ok: #1a7f37; --bad: #cf222e; --warn: #9a6700;
+      font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--fg);
+      max-width: 1100px; margin: 24px auto 8px; padding: 0 16px; }
+    @media (prefers-color-scheme: dark) {
+      .litmus { --fg: #e6edf3; --muted: #8d96a0; --line: #30363d; --ok: #3fb950; --bad: #f85149; --warn: #d29922; }
+    }
+    .litmus .scores { display: flex; gap: 40px; flex-wrap: wrap; }
+    .litmus .scores div { display: flex; flex-direction: column; }
+    .litmus .scores b { font-size: 32px; line-height: 1.1; }
+    .litmus .scores span { font-weight: 600; }
+    .litmus small { color: var(--muted); font-weight: normal; }
+    .litmus .bar { height: 8px; border-radius: 4px; background: var(--bad); margin: 16px 0 4px; overflow: hidden; }
+    .litmus .bar i { display: block; height: 100%; background: var(--ok); }
+    .litmus .counts { color: var(--muted); margin: 0 0 8px; }
+    .litmus h2 { font-size: 18px; margin: 28px 0 8px; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+    .litmus h3 { font-size: 15px; margin: 16px 0 2px; }
+    .litmus h3 span { font-size: 11px; padding: 1px 6px; border-radius: 4px; color: #fff; vertical-align: 2px; }
+    .litmus .untested { background: var(--bad); }
+    .litmus .partial { background: var(--warn); }
+    .litmus ul { margin: 4px 0; padding-left: 20px; }
+    .litmus ul.files { list-style: none; padding-left: 0; }
+    .litmus ul.files b { display: inline-block; min-width: 56px; text-align: right; margin-right: 8px; }
+    .litmus li em { color: var(--warn); font-style: normal; margin: 0 6px; }
+    .litmus code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+    .litmus .tests { color: var(--muted); margin: 0; }
+    .litmus a { color: inherit; }
+    .litmus details summary { cursor: pointer; color: var(--muted); }
+    </style>
+    """
 
     // MARK: -
 
@@ -68,12 +194,10 @@ public struct StrykerReport: Sendable {
 
         // Compared with links resolved: /tmp and /private/tmp are one place
         // spelled two ways, and a missed match shows the mutated copy.
-        let root = Self.canonical(workingCopy.path) + "/"
         var files: [String: Any] = [:]
 
         for (path, results) in Dictionary(grouping: summary.results, by: \.mutant.filePath) {
-            let resolved = Self.canonical(path)
-            let relative = resolved.hasPrefix(root) ? String(resolved.dropFirst(root.count)) : path
+            let relative = relative(path)
             let original = project.appendingPathComponent(relative)
             guard let source = (try? String(contentsOf: original, encoding: .utf8))
                 ?? (try? String(contentsOfFile: path, encoding: .utf8))
@@ -151,6 +275,13 @@ public struct StrykerReport: Sendable {
         let bytes = Array(lines[line - 1].utf8)
         let prefix = bytes.prefix(max(0, utf8Column - 1))
         return String(decoding: prefix, as: UTF8.self).utf16.count + 1
+    }
+
+    /// A mutant's file as the viewer names it: under the working copy.
+    private func relative(_ path: String) -> String {
+        let root = Self.canonical(workingCopy.path) + "/"
+        let resolved = Self.canonical(path)
+        return resolved.hasPrefix(root) ? String(resolved.dropFirst(root.count)) : path
     }
 
     private static func canonical(_ path: String) -> String {
