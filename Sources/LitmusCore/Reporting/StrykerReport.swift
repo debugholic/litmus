@@ -88,26 +88,30 @@ public struct StrykerReport: Sendable {
 
         if !plan.unchecked.isEmpty {
             var rows: [String] = []
-            for entry in plan.unchecked {
-                let gap = entry.gap
-                let passing = entry.passedBy
+            for group in plan.groups {
+                let passing = group.passedBy
                 let passedBy = passing.isEmpty ? "" : """
                 <p class="tests">passed by \(passing.prefix(3).map { Self.escape($0.name) }.joined(separator: ", "))\(passing.count > 3 ? " and \(passing.count - 3) more" : "")</p>
                 """
-                let survivors = gap.survivors.map { survivor in
-                    """
-                    <li><a href="\(link(to: survivor.mutant.filePath))">\(Self.escape(survivor.mutant.fileName)):\(survivor.mutant.line)</a> \
-                    <em>\(survivor.gapKind.rawValue)</em> <code>\(Self.escape(Report.what(survivor.mutant)))</code> \
-                    <small>\(survivor.gapKind.hint)</small></li>
+                let functions = group.entries.map { entry in
+                    let gap = entry.gap
+                    let member = TestPlan.split(gap.name).member ?? gap.name
+                    let survivors = gap.survivors.map { survivor in
+                        """
+                        <li><a href="\(link(to: survivor.mutant.filePath))">\(Self.escape(survivor.mutant.fileName)):\(survivor.mutant.line)</a> \
+                        <em>\(survivor.gapKind.rawValue)</em> <code>\(Self.escape(Report.what(survivor.mutant)))</code> \
+                        <small>\(survivor.gapKind.hint)</small></li>
+                        """
+                    }.joined(separator: "\n")
+                    let more = entry.unreached > 0
+                        ? "<li><small>and \(entry.unreached) more in it no test reaches</small></li>" : ""
+                    return """
+                    <h4><span class="\(gap.status == .untested ? "untested" : "partial")">\(gap.status.rawValue)</span> \
+                    \(Self.escape(member)) <small>\(gap.caught) of \(gap.scored) caught</small></h4>
+                    <ul>\(survivors)\(more)</ul>
                     """
                 }.joined(separator: "\n")
-                let more = entry.unreached > 0
-                    ? "<p class=\"tests\">and \(entry.unreached) more in it no test reaches</p>" : ""
-                rows.append("""
-                <article><h3><span class="\(gap.status == .untested ? "untested" : "partial")">\(gap.status.rawValue)</span> \
-                \(Self.escape(gap.name)) <small>\(gap.caught) of \(gap.scored) caught</small></h3>
-                \(passedBy)<ul>\(survivors)</ul>\(more)</article>
-                """)
+                rows.append("<article><h3>\(Self.escape(group.owner))</h3>\n\(passedBy)\n\(functions)</article>")
             }
             parts.append("""
             <h2>What to test <small>tests run through these and do not notice the change</small></h2>
@@ -179,8 +183,10 @@ public struct StrykerReport: Sendable {
     .litmus .bar i { display: block; height: 100%; background: var(--ok); }
     .litmus .counts { color: var(--muted); margin: 0 0 8px; }
     .litmus h2 { font-size: 18px; margin: 28px 0 8px; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
-    .litmus h3 { font-size: 15px; margin: 16px 0 2px; }
-    .litmus h3 span { font-size: 11px; padding: 1px 6px; border-radius: 4px; color: #fff; vertical-align: 2px; }
+    .litmus h3 { font-size: 15px; margin: 18px 0 2px; }
+    .litmus h4 { font-size: 14px; margin: 8px 0 2px 12px; }
+    .litmus article ul { margin-left: 12px; }
+    .litmus h4 span { font-size: 11px; padding: 1px 6px; border-radius: 4px; color: #fff; vertical-align: 2px; }
     .litmus .untested { background: var(--bad); }
     .litmus .partial { background: var(--warn); }
     .litmus ul { margin: 4px 0; padding-left: 20px; }

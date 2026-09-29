@@ -150,4 +150,42 @@ public struct TestPlan: Sendable {
     }
 
     public var unreachedTotal: Int { unreached.reduce(0) { $0 + $1.count } }
+
+    /// The functions of one type, and the tests that ran through any of them.
+    public struct Group: Sendable {
+        /// The type, or the name code outside one goes by.
+        public let owner: String
+        public let entries: [Entry]
+        public let passedBy: [TestRef]
+    }
+
+    /// `unchecked`, by type, in the order their first function comes. A
+    /// view model's nine properties each came with the same nine tests
+    /// named under it; by type they are named once.
+    public var groups: [Group] {
+        var order: [String] = []
+        var byOwner: [String: [Entry]] = [:]
+        for entry in unchecked {
+            let owner = Self.split(entry.gap.name).owner
+            if byOwner[owner] == nil { order.append(owner) }
+            byOwner[owner, default: []].append(entry)
+        }
+
+        return order.map { owner in
+            let entries = byOwner[owner] ?? []
+            var passedBy: [TestRef] = []
+            for test in entries.flatMap(\.passedBy) where !passedBy.contains(where: { $0.id == test.id }) {
+                passedBy.append(test)
+            }
+            return Group(owner: owner, entries: entries, passedBy: passedBy)
+        }
+    }
+
+    /// `Type.member(label:)` into the type and the member; a name with no
+    /// type in it is its own owner, with no member.
+    public static func split(_ name: String) -> (owner: String, member: String?) {
+        let head = name.firstIndex(of: "(").map { name[..<$0] } ?? name[...]
+        guard let dot = head.lastIndex(of: "."), dot != head.startIndex else { return (name, nil) }
+        return (String(name[..<dot]), String(name[name.index(after: dot)...]))
+    }
 }

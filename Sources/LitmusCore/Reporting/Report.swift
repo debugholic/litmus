@@ -60,15 +60,21 @@ public struct Report: Sendable {
 
         // One file says nothing a second time; several are where the weak one
         // hides behind the average.
+        // Only files with a score: a file the tests never reach says nothing
+        // here, and one project listed 112 of them. They are counted below.
         let files = summary.files
-        if files.count > 1 {
-            let width = files.map(\.path.count).max() ?? 0
+        let scored = files.filter { $0.score != nil }
+        if files.count > 1, !scored.isEmpty {
+            let width = scored.map(\.path.count).max() ?? 0
             lines.append("")
             lines.append("by file, weakest first:")
-            for file in files {
+            for file in scored {
                 let score = file.score.map(percent) ?? "—"
                 let padded = file.path.padding(toLength: width, withPad: " ", startingAt: 0)
                 lines.append("  \(String(repeating: " ", count: max(0, 4 - score.count)))\(score)  \(padded)  \(counts(file.results))")
+            }
+            if files.count > scored.count {
+                lines.append("  and \(files.count - scored.count) file(s) with nothing the tests reach")
             }
         }
 
@@ -90,20 +96,21 @@ public struct Report: Sendable {
         var lines = ["", "what to test — \(untested) untested, \(plan.unchecked.count - untested) partly tested:"]
 
         let kindWidth = GapKind.allCases.map(\.rawValue.count).max() ?? 0
-        for entry in plan.unchecked {
-            let gap = entry.gap
+        for group in plan.groups {
             lines.append("")
-            lines.append("\(gap.status.rawValue.padding(toLength: 9, withPad: " ", startingAt: 0))"
-                + "\(gap.name)  \(gap.caught) of \(gap.scored) caught")
-            if let line = Self.passedThrough(by: entry.passedBy) {
-                lines.append("  \(line)")
-            }
-            for survivor in gap.survivors {
-                let kind = survivor.gapKind.rawValue.padding(toLength: kindWidth, withPad: " ", startingAt: 0)
-                lines.append("  \(location(of: survivor))  \(kind)  \(Self.what(survivor.mutant))")
-            }
-            if entry.unreached > 0 {
-                lines.append("  and \(entry.unreached) more in it no test reaches")
+            lines.append(group.owner + (Self.passedThrough(by: group.passedBy).map { " — \($0)" } ?? ""))
+            for entry in group.entries {
+                let gap = entry.gap
+                let member = TestPlan.split(gap.name).member ?? gap.name
+                lines.append("  \(gap.status.rawValue.padding(toLength: 9, withPad: " ", startingAt: 0))"
+                    + "\(member)  \(gap.caught) of \(gap.scored) caught")
+                for survivor in gap.survivors {
+                    let kind = survivor.gapKind.rawValue.padding(toLength: kindWidth, withPad: " ", startingAt: 0)
+                    lines.append("    \(location(of: survivor))  \(kind)  \(Self.what(survivor.mutant))")
+                }
+                if entry.unreached > 0 {
+                    lines.append("    and \(entry.unreached) more in it no test reaches")
+                }
             }
         }
         return lines

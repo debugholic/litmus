@@ -101,8 +101,8 @@ struct GapTests {
         ], duration: 1)).rendered(as: .plain)
 
         #expect(rendered.contains("what to test — 1 untested, 0 partly tested:"))
-        #expect(rendered.contains("UNTESTED GameResult.handleRowTap(for:)  0 of 1 caught"))
-        #expect(rendered.contains("A.swift:163  comparison   `a == b` → `a != b`"))
+        #expect(rendered.contains("\nGameResult\n  UNTESTED handleRowTap(for:)  0 of 1 caught"))
+        #expect(rendered.contains("    A.swift:163  comparison   `a == b` → `a != b`"))
     }
 
     @Test("plain report names the tests that passed a survivor")
@@ -196,5 +196,39 @@ struct GapTests {
         #expect(!rendered.contains("A.unreached()"))
         #expect(rendered.contains("no test reaches — 3 mutant(s) in 2 file(s), most first:"))
         #expect(rendered.contains("  2  B.swift"))
+    }
+
+    /// A view model's properties each came with the same tests named under
+    /// them; by type they are named once.
+    @Test("groups what to test by type, naming the tests that passed once")
+    func plainGroups() {
+        let test = TestRef(id: "App.T/a()/T.swift:1:1", name: "초기 상태")
+        var locked = result(10, .survived, in: "Player.locked")
+        locked.coveredBy = [test]
+        var hidden = result(11, .survived, in: "Player.hidden")
+        hidden.coveredBy = [test]
+
+        let plan = TestPlan([locked, hidden, result(20, .survived, in: "Tracker.start()", file: "/p/B.swift")])
+        let rendered = try! Report(MutationRun.Summary(results: [locked, hidden], duration: 1)).rendered(as: .plain)
+
+        #expect(plan.groups.map(\.owner) == ["Player", "Tracker"] || plan.groups.map(\.owner) == ["Tracker", "Player"])
+        #expect(plan.groups.first { $0.owner == "Player" }?.entries.count == 2)
+        #expect(rendered.components(separatedBy: "passed by:").count == 2)
+        #expect(rendered.contains("Player — passed by: 초기 상태"))
+        #expect(TestPlan.split("A.B.f(x:)") == ("A.B", "f(x:)"))
+        #expect(TestPlan.split("Int+Extension") == ("Int+Extension", nil))
+    }
+
+    @Test("lists only files with a score in the file table, and counts the rest")
+    func plainFileTable() {
+        let rendered = try! Report(MutationRun.Summary(results: [
+            result(1, .killed, in: "f()"),
+            result(2, .survived, in: "g()", file: "/p/B.swift"),
+            result(3, .noCoverage, in: "h()", file: "/p/C.swift"),
+        ], duration: 1)).rendered(as: .plain)
+
+        #expect(rendered.contains("by file, weakest first:"))
+        #expect(!rendered.contains("—  C.swift"))
+        #expect(rendered.contains("and 1 file(s) with nothing the tests reach"))
     }
 }
