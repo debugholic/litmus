@@ -26,7 +26,9 @@ struct BatchTests {
                 .split(separator: "\n").count ?? 0
         }
 
-        init(neverStarts: Bool = false) throws {
+        /// `failingLaunches` launches exit at once, as a spawn launchd
+        /// refused does, before the runner writes anything.
+        init(neverStarts: Bool = false, failingLaunches: Int = 0) throws {
             directory = URL(fileURLWithPath: NSTemporaryDirectory())
                 .appendingPathComponent("litmus-batch-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -59,6 +61,10 @@ struct BatchTests {
             let script = """
             #!/bin/sh
             echo launched >> "\(directory.path)/launches"
+            if [ "$(wc -l < "\(directory.path)/launches")" -le \(failingLaunches) ]; then
+              echo "Launching Tests Finished with error: Process spawn via launchd failed."
+              exit 65
+            fi
             batch="$TEST_RUNNER_LITMUS_BATCH_FILE"
             out="$TEST_RUNNER_LITMUS_RESULTS_FILE"
             : > "$out"
@@ -175,6 +181,32 @@ struct BatchTests {
 
         #expect(verdicts == ["-": .killed])
         #expect(runner.launches == 1)
+    }
+
+    /// One run ended half an hour in on a spawn launchd refused once.
+    @Test("launches again when the runner did not come up, and carries on")
+    func relaunchAfterFailedLaunch() throws {
+        Xcodebuild.relaunchDelay = 0
+        let runner = try FakeRunner(failingLaunches: 2)
+        var events: [Batch.Event] = []
+
+        let verdicts = try run(["-", "a", "killed-b"], with: runner, events: &events)
+
+        #expect(runner.launches == 3)
+        #expect(verdicts["a"] == .survived)
+        #expect(verdicts["killed-b"] == .killed)
+    }
+
+    @Test("stops when the runner keeps not coming up")
+    func relaunchGivesUp() throws {
+        Xcodebuild.relaunchDelay = 0
+        let runner = try FakeRunner(failingLaunches: 10)
+        var events: [Batch.Event] = []
+
+        #expect(throws: Xcodebuild.Failure.self) {
+            _ = try run(["-", "a"], with: runner, events: &events)
+        }
+        #expect(runner.launches == Xcodebuild.launchAttempts)
     }
 
     @Test("gives up when the runner never starts")

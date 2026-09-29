@@ -365,8 +365,12 @@ public struct MutationRun: Sendable {
                 } else {
                     outcome = try await runIsolated(share, target: target.name, built: runnable)
                 }
-            } catch let failure as Failure where targets.count > 1 {
-                progress(.targetSkipped(target.name, reason: failure.description))
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch where targets.count > 1 {
+                // One target that cannot run — a red baseline, a runner that
+                // would not launch — is no reason to lose the others.
+                progress(.targetSkipped(target.name, reason: "\(error)"))
                 continue
             }
 

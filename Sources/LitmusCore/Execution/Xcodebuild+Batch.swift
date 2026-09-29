@@ -41,6 +41,8 @@ extension Xcodebuild: BatchingHarness {
         }
         defer { probeDirectory.map { try? FileManager.default.removeItem(at: $0) } }
 
+        var stalls = 0
+
         while !remaining.isEmpty {
             let outcome = try launch(
                 target: target, xctestrun: xctestrun, lane: lane, ids: remaining,
@@ -71,14 +73,28 @@ extension Xcodebuild: BatchingHarness {
 
             let before = remaining.count
             remaining = remaining.filter { verdicts[$0] == nil }
+            if remaining.count < before {
+                stalls = 0
+                continue
+            }
 
-            guard remaining.count < before else {
+            // Nothing ran: the runner did not come up, or went down before
+            // the first mutant. That is the machine, not a mutant — one run
+            // ended half an hour in on a spawn launchd refused once — so it
+            // is tried again before the batch gives up.
+            stalls += 1
+            guard stalls < Self.launchAttempts else {
                 throw Failure(description: "the batch made no progress:\n\n\(Self.errorLines(in: outcome.log))")
             }
+            Thread.sleep(forTimeInterval: Self.relaunchDelay)
         }
 
         return verdicts
     }
+
+    /// How many launches in a row may run nothing before the batch stops.
+    static let launchAttempts = 3
+    nonisolated(unsafe) static var relaunchDelay: TimeInterval = 5
 
     private struct Launch {
         var verdicts: [String: Verdict]
