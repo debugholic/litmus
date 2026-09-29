@@ -116,6 +116,10 @@ final class SiteCollector: SyntaxVisitor {
         guard
             `operator` == .replaceReturnValue,
             let expression = node.expression,
+            // `return switch …` and `return if …`: Swift takes those only
+            // as the whole value, never inside another expression.
+            !expression.is(SwitchExprSyntax.self),
+            !expression.is(IfExprSyntax.self),
             let type = node.declaredReturnType,
             let empty = type.emptyValue(replacing: expression)
         else { return .visitChildren }

@@ -167,6 +167,12 @@ struct NewOperatorTests {
             func g() { return }
             func h() -> Widget { return Widget() }
             init?(x: Int) { return nil }
+            func j(_ x: Int) -> String {
+                return switch x { case 0: "zero" default: "other" }
+            }
+            func k(_ x: Bool) -> Int {
+                return if x { 1 } else { 2 }
+            }
             var i: Int {
                 get { return 1 }
                 set { return }
