@@ -51,10 +51,12 @@ public struct StrykerReport: Sendable {
         </head>
         <body>
         \(front())
+        <nav class="litmus-back" hidden><a class="button" href="#summary">← Summary</a></nav>
         <mutation-test-report-app title-postfix="Litmus"></mutation-test-report-app>
         <script>
         document.querySelector("mutation-test-report-app").report = \(embedded);
         </script>
+        \(Self.pageScript)
         </body>
         </html>
 
@@ -70,39 +72,64 @@ public struct StrykerReport: Sendable {
     func front() -> String {
         let plan = TestPlan(summary.results)
         let caught = summary.killed + summary.timedOut
+        let reached = caught + summary.survived
+        let total = caught + summary.survived + summary.noCoverage
         var parts: [String] = []
 
-        // Scores, and a bar of only what the tests reach.
-        let strength = summary.testStrength.map { "\(Int($0.rounded()))%" } ?? "—"
-        let whole = summary.mutationScore.map { "\(Int($0.rounded()))%" } ?? "—"
-        let reached = caught + summary.survived
-        let share = reached > 0 ? Double(caught) / Double(reached) * 100 : 0
         parts.append("""
-        <section class="scores">
-        <div><b>\(strength)</b><span>test strength</span><small>caught \(caught) of the \(reached) mutants the tests reach</small></div>
-        <div><b>\(whole)</b><span>mutation score</span><small>caught \(caught) of all \(caught + summary.survived + summary.noCoverage)</small></div>
-        </section>
-        \(reached > 0 ? """
-        <div class="bar" title="caught \(caught), survived \(summary.survived)"><i style="width: \(String(format: "%.1f", share))%"></i></div>
-        """ : "")
-        <p class="counts">caught \(caught) · survived \(summary.survived) · no test reaches \(summary.noCoverage)\(summary.unviable > 0 ? " · did not build \(summary.unviable)" : "")</p>
-        \([run.map { Self.escape($0.line) }, Report.took(summary)].compactMap { $0 }.map { "<p class=\"run\">\($0)</p>" }.joined(separator: "\n"))
+        <div class="top"><h1>Summary<span>Litmus</span></h1>\
+        <a class="button" href="#mutant">Show details →</a></div>
         """)
+
+        // The two scores, in cards coloured by the report's own thresholds.
+        func card(_ value: Double?, _ label: String, _ hint: String) -> String {
+            let text = value.map { "\(Int($0.rounded()))%" } ?? "—"
+            return """
+            <div class="card"><div class="value \(Self.grade(value))">\(text)</div>\
+            <div class="label">\(label)</div><div class="muted">\(hint)</div></div>
+            """
+        }
+        parts.append("""
+        <div class="cards">
+        \(card(summary.testStrength, "Test strength", "caught \(caught) of the \(reached) mutants the tests reach"))
+        \(card(summary.mutationScore, "Mutation score", "caught \(caught) of all \(total)"))
+        </div>
+        """)
+
+        // The viewer's bar, of what the tests reach only: with every mutant in
+        // it, the few they reach were slivers whose numbers ran together.
+        if reached > 0 {
+            let share = Double(caught) / Double(reached) * 100
+            parts.append("""
+            <div class="bar" title="caught \(caught), survived \(summary.survived)">\
+            <div class="caught" style="width: \(String(format: "%.1f", share))%">\(caught > 0 ? "\(caught)" : "")</div>\
+            <div class="survived" style="width: \(String(format: "%.1f", 100 - share))%">\(summary.survived > 0 ? "\(summary.survived)" : "")</div>\
+            </div>
+            """)
+        }
+
+        var meta = ["caught \(caught) · survived \(summary.survived) · no test reaches \(summary.noCoverage)"
+            + (summary.unviable > 0 ? " · did not build \(summary.unviable)" : "")]
+        if let run { meta.append(Self.escape(run.line)) }
+        if let took = Report.took(summary) { meta.append(took) }
+        parts.append(meta.map { "<p class=\"muted\">\($0)</p>" }.joined(separator: "\n"))
 
         let areas = summary.areas
         if areas.count > 1 {
             let rows = areas.map { area in
-                let score = area.score.map { "\(Int($0.rounded()))%" } ?? "—"
-                return """
-                <tr><td>\(Self.escape(area.name))</td><td class="num">\(score)</td><td class="num">\(area.count(.killed) + area.count(.timedOut))</td>\
+                """
+                <tr><td>\(Self.escape(area.name))</td>\
+                <td class="num \(Self.grade(area.score))">\(area.score.map { "\(Int($0.rounded()))%" } ?? "—")</td>\
+                <td class="num">\(area.count(.killed) + area.count(.timedOut))</td>\
                 <td class="num">\(area.count(.survived))</td><td class="num">\(area.count(.noCoverage))</td></tr>
                 """
             }.joined(separator: "\n")
-            parts.append("""
-            <h2>By \(summary.areasAreModules ? "module" : "folder") <small>weakest first</small></h2>
-            <table class="areas"><thead><tr><th></th><th>score</th><th>caught</th><th>survived</th><th>no test reaches</th></tr></thead>
-            <tbody>\(rows)</tbody></table>
-            """)
+            parts.append(Self.table(
+                title: "By \(summary.areasAreModules ? "module" : "folder")", note: "weakest first",
+                head: [summary.areasAreModules ? "Module" : "Folder", "Score", "Caught", "Survived", "No coverage"],
+                numbers: [1, 2, 3, 4],
+                rows: rows
+            ))
         }
 
         if !plan.unchecked.isEmpty {
@@ -110,63 +137,99 @@ public struct StrykerReport: Sendable {
             for group in plan.groups {
                 let passing = group.passedBy
                 let passedBy = passing.isEmpty ? "" : """
-                <p class="tests">passed by \(passing.prefix(3).map { Self.escape($0.name) }.joined(separator: ", "))\(passing.count > 3 ? " and \(passing.count - 3) more" : "")</p>
+                <span class="muted">passed by \(passing.prefix(3).map { Self.escape($0.name) }.joined(separator: ", "))\
+                \(passing.count > 3 ? " and \(passing.count - 3) more" : "")</span>
                 """
-                let functions = group.entries.map { entry in
+                rows.append("<tr class=\"group\"><td colspan=\"4\"><b>\(Self.escape(group.owner))</b>\(passedBy)</td></tr>")
+
+                for entry in group.entries {
                     let gap = entry.gap
                     let member = TestPlan.split(gap.name).member ?? gap.name
-                    let survivors = gap.survivors.map { survivor in
-                        """
-                        <li><a href="\(link(to: survivor.mutant.filePath))">\(Self.escape(survivor.mutant.fileName)):\(survivor.mutant.line)</a> \
-                        <em>\(survivor.gapKind.rawValue)</em> <code>\(Self.escape(Report.what(survivor.mutant)))</code> \
-                        <small>\(survivor.gapKind.hint)</small></li>
-                        """
-                    }.joined(separator: "\n")
-                    let more = entry.unreached > 0
-                        ? "<li><small>and \(entry.unreached) more in it no test reaches</small></li>" : ""
-                    return """
-                    <h4><span class="\(gap.status == .untested ? "untested" : "partial")">\(gap.status.rawValue)</span> \
-                    \(Self.escape(member)) <small>\(gap.caught) of \(gap.scored) caught</small></h4>
-                    <ul>\(survivors)\(more)</ul>
-                    """
-                }.joined(separator: "\n")
-                rows.append("<article><h3>\(Self.escape(group.owner))</h3>\n\(passedBy)\n\(functions)</article>")
+                    rows.append("""
+                    <tr class="function"><td colspan="4">\
+                    <span class="badge \(gap.status == .untested ? "bad" : "warn")">\(gap.status.rawValue)</span>\
+                    \(Self.escape(member)) <span class="muted">\(gap.caught) of \(gap.scored) caught</span></td></tr>
+                    """)
+                    for survivor in gap.survivors {
+                        rows.append("""
+                        <tr><td><a href="\(link(to: survivor.mutant.filePath))">\
+                        \(Self.escape(survivor.mutant.fileName)):\(survivor.mutant.line)</a></td>\
+                        <td>\(survivor.gapKind.rawValue)</td>\
+                        <td><code>\(Self.escape(Report.what(survivor.mutant).replacingOccurrences(of: "`", with: "")))</code></td>\
+                        <td class="muted">\(survivor.gapKind.hint)</td></tr>
+                        """)
+                    }
+                    if entry.unreached > 0 {
+                        rows.append("<tr><td colspan=\"4\" class=\"muted\">and \(entry.unreached) more in it no test reaches</td></tr>")
+                    }
+                }
             }
-            parts.append("""
-            <h2>What to test <small>tests run through these and do not notice the change</small></h2>
-            \(rows.joined(separator: "\n"))
-            """)
+            parts.append(Self.table(
+                title: "What to test", note: "tests run through these and do not notice the change",
+                head: ["Where", "Kind", "Change", "What to add"],
+                rows: rows.joined(separator: "\n")
+            ))
         }
 
         if !plan.unreached.isEmpty {
             let row = { (file: (path: String, count: Int)) in
-                "<li><b>\(file.count)</b> <a href=\"\(self.link(to: file.path))\">\(Self.escape(self.relative(file.path)))</a></li>"
+                """
+                <tr><td><a href="\(self.link(to: file.path))">\(Self.escape(self.relative(file.path)))</a></td>\
+                <td class="num">\(file.count)</td></tr>
+                """
             }
-            let shown = plan.unreached.prefix(10).map(row).joined(separator: "\n")
+            let shown = plan.unreached.prefix(10).map(row)
             let rest = plan.unreached.dropFirst(10)
-            let more = rest.isEmpty ? "" : """
-            <details><summary>\(rest.count) more file(s)</summary><ul class="files">\(rest.map(row).joined(separator: "\n"))</ul></details>
-            """
-            parts.append("""
-            <h2>No test reaches <small>\(plan.unreachedTotal) mutant(s) in \(plan.unreached.count) file(s)</small></h2>
-            <ul class="files">\(shown)</ul>\(more)
-            """)
+            let more = rest.isEmpty ? [] : ["""
+                <tr><td colspan="2"><details><summary>\(rest.count) more file(s)</summary>\
+                <table>\(rest.map(row).joined(separator: "\n"))</table></details></td></tr>
+                """]
+            parts.append(Self.table(
+                title: "No test reaches", note: "\(plan.unreachedTotal) mutant(s) in \(plan.unreached.count) file(s)",
+                head: ["File", "Mutants"],
+                numbers: [1],
+                rows: (shown + more).joined(separator: "\n")
+            ))
         }
 
         let costly = summary.tests.filter { $0.cost != nil }.prefix(5)
         if !costly.isEmpty {
             let rows = costly.map { score in
-                let cost = Report.seconds(score.cost ?? 0)
-                let each = Report.seconds(score.test.duration ?? 0)
-                return "<li><b>\(cost)</b> \(each) × \(score.reached) \(Self.escape(score.test.name))</li>"
+                """
+                <tr><td>\(Self.escape(score.test.name))</td>\
+                <td class="num">\(Report.seconds(score.test.duration ?? 0))</td>\
+                <td class="num">\(score.reached)</td><td class="num"><b>\(Report.seconds(score.cost ?? 0))</b></td></tr>
+                """
             }.joined(separator: "\n")
-            parts.append("""
-            <h2>Slowest tests <small>each runs once for every mutant it reaches</small></h2>
-            <ul class="files">\(rows)</ul>
-            """)
+            parts.append(Self.table(
+                title: "Slowest tests", note: "each runs once for every mutant it reaches",
+                head: ["Test", "Alone", "Mutants", "Cost"],
+                numbers: [1, 2, 3],
+                rows: rows
+            ))
         }
 
-        return "<header class=\"litmus\">\n\(parts.joined(separator: "\n"))\n</header>"
+        return "<div class=\"litmus\">\n\(parts.joined(separator: "\n"))\n</div>"
+    }
+
+    /// A section as the viewer draws its file table: a heading, then a table
+    /// in a rounded border.
+    private static func table(title: String, note: String, head: [String], numbers: Set<Int> = [], rows: String) -> String {
+        let cells = head.enumerated().map { index, name in
+            "<th\(numbers.contains(index) ? " class=\"num\"" : "")>\(name)</th>"
+        }.joined()
+        return """
+        <h2>\(title) <small>\(escape(note))</small></h2>
+        <div class="frame"><table><thead><tr>\(cells)</tr></thead><tbody>
+        \(rows)
+        </tbody></table></div>
+        """
+    }
+
+    /// The report's thresholds: 80 and up is good, under 60 bad.
+    private static func grade(_ score: Double?) -> String {
+        guard let score else { return "" }
+        return score >= 80 ? "good" : score >= 60 ? "warn" : "bad"
     }
 
     /// The viewer's route to a file. Encoded: a `#`, a space or a `%` in the
@@ -197,43 +260,115 @@ public struct StrykerReport: Sendable {
             .replacingOccurrences(of: "\"", with: "&quot;")
     }
 
+    /// The viewer's look, so the page reads as one: its container, which
+    /// is left-aligned and widens in steps rather than centred; its type,
+    /// palette, borders and bar; and its light or dark theme, which the
+    /// script below follows when its switch is pressed.
     static let frontStyle = """
     <style>
-    .litmus { --fg: #1f2328; --muted: #656d76; --line: #d0d7de; --ok: #1a7f37; --bad: #cf222e; --warn: #9a6700;
-      font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--fg);
-      max-width: 1100px; margin: 24px auto 8px; padding: 0 16px; }
-    @media (prefers-color-scheme: dark) {
-      .litmus { --fg: #e6edf3; --muted: #8d96a0; --line: #30363d; --ok: #3fb950; --bad: #f85149; --warn: #d29922; }
+    .litmus {
+      --fg: oklch(0.274 0.006 286.033); --muted: oklch(0.552 0.016 285.938); --line: oklch(0.92 0.004 286.32);
+      --bg: #fff; --head: oklch(0.967 0.001 286.375);
+      --good: oklch(0.627 0.194 149.214); --warn: oklch(0.681 0.162 75.834); --bad: oklch(0.577 0.245 27.325);
+      width: 100%; box-sizing: border-box; padding-bottom: 16px; background: var(--bg); color: var(--fg);
+      font: 14px/1.5 -apple-system, system-ui, "Segoe UI", Roboto, "Helvetica Neue", "Noto Sans", Arial, sans-serif;
     }
-    .litmus .scores { display: flex; gap: 40px; flex-wrap: wrap; }
-    .litmus .scores div { display: flex; flex-direction: column; }
-    .litmus .scores b { font-size: 32px; line-height: 1.1; }
-    .litmus .scores span { font-weight: 600; }
-    .litmus small { color: var(--muted); font-weight: normal; }
-    .litmus .bar { height: 8px; border-radius: 4px; background: var(--bad); margin: 16px 0 4px; overflow: hidden; }
-    .litmus .bar i { display: block; height: 100%; background: var(--ok); }
-    .litmus .counts { color: var(--muted); margin: 0 0 8px; }
-    .litmus .run { color: var(--muted); font-size: 12px; margin: 0; }
-    .litmus h2 { font-size: 18px; margin: 28px 0 8px; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
-    .litmus h3 { font-size: 15px; margin: 18px 0 2px; }
-    .litmus h4 { font-size: 14px; margin: 8px 0 2px 12px; }
-    .litmus article ul { margin-left: 12px; }
-    .litmus h4 span { font-size: 11px; padding: 1px 6px; border-radius: 4px; color: #fff; vertical-align: 2px; }
-    .litmus .untested { background: var(--bad); }
-    .litmus .partial { background: var(--warn); }
-    .litmus ul { margin: 4px 0; padding-left: 20px; }
-    .litmus ul.files { list-style: none; padding-left: 0; }
-    .litmus ul.files b { display: inline-block; min-width: 56px; text-align: right; margin-right: 8px; }
-    .litmus li em { color: var(--warn); font-style: normal; margin: 0 6px; }
+    .litmus[data-theme="dark"] {
+      --fg: oklch(0.967 0.001 286.375); --muted: oklch(0.705 0.015 286.067); --line: oklch(0.37 0.013 285.805);
+      --bg: oklch(0.21 0.006 285.885); --head: oklch(0.274 0.006 286.033);
+    }
+    @media (min-width: 640px) { .litmus { max-width: 640px; } }
+    @media (min-width: 768px) { .litmus { max-width: 768px; } }
+    @media (min-width: 1024px) { .litmus { max-width: 1024px; } }
+    @media (min-width: 1280px) { .litmus { max-width: 1280px; } }
+    @media (min-width: 1536px) { .litmus { max-width: 1536px; } }
+    .litmus h1 { margin: 16px 0; font-size: 48px; line-height: 1; font-weight: 700; letter-spacing: -0.025em; }
+    .litmus h1 span { margin-left: 16px; font-size: 38.4px; font-weight: 300; color: var(--muted); }
+    .litmus h2 { margin: 32px 0 12px; font-size: 24px; font-weight: 700; letter-spacing: -0.015em; }
+    .litmus small, .litmus .muted { color: var(--muted); font-weight: 400; font-size: 14px; }
+    .litmus p.muted { margin: 4px 0; }
+    .litmus .cards { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+    .litmus .card { flex: 1 1 240px; border: 1px solid var(--line); border-radius: 6px; padding: 16px; }
+    .litmus .card .value { font-size: 36px; font-weight: 700; line-height: 1.1; }
+    .litmus .card .label { font-weight: 700; margin: 4px 0 2px; }
+    .litmus .good { color: var(--good); } .litmus .warn { color: var(--warn); } .litmus .bad { color: var(--bad); }
+    .litmus .bar { display: flex; height: 32px; border-radius: 4px; overflow: hidden; margin: 16px 0 8px; }
+    .litmus .bar div { display: flex; align-items: center; padding-left: 8px; font-size: 16px; overflow: hidden; }
+    .litmus .bar .caught { background: var(--good); } .litmus .bar .survived { background: var(--bad); }
+    .litmus .frame { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; }
+    .litmus table { width: 100%; border-collapse: collapse; }
+    .litmus th { padding: 12px 16px; font-weight: 700; text-align: left; white-space: nowrap; }
+    .litmus td { padding: 8px 16px; border-top: 1px solid var(--line); vertical-align: top; }
+    .litmus .num { text-align: right; white-space: nowrap; }
+    .litmus tr.group td { background: var(--head); }
+    .litmus tr.group .muted { margin-left: 12px; }
+    .litmus tr.function td { font-weight: 600; }
+    .litmus .badge { display: inline-block; margin-right: 8px; padding: 0 6px; border-radius: 4px;
+      font-size: 11px; font-weight: 700; color: #fff; }
+    .litmus .badge.bad { background: var(--bad); } .litmus .badge.warn { background: var(--warn); }
     .litmus code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
-    .litmus .tests { color: var(--muted); margin: 0; }
-    .litmus a { color: inherit; }
+    .litmus a { color: inherit; text-decoration: none; } .litmus a:hover { text-decoration: underline; }
     .litmus details summary { cursor: pointer; color: var(--muted); }
-    .litmus table.areas { border-collapse: collapse; }
-    .litmus table.areas th, .litmus table.areas td { padding: 2px 16px 2px 0; text-align: left; }
-    .litmus table.areas th { color: var(--muted); font-weight: normal; }
-    .litmus table.areas td.num, .litmus table.areas th:not(:first-child) { text-align: right; }
+    .litmus details table td { border-top: 0; padding: 4px 0; }
+    .litmus .top { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+    .litmus .button, .litmus-back .button { display: inline-block; padding: 8px 14px; border: 1px solid var(--line);
+      border-radius: 6px; font-weight: 600; text-decoration: none; }
+    .litmus .button:hover, .litmus-back .button:hover { background: var(--head); text-decoration: none; }
+    .litmus-back { padding: 16px 0 0; font: 14px/1.5 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif; }
+    .litmus-back .button { --line: oklch(0.92 0.004 286.32); --head: oklch(0.967 0.001 286.375); color: oklch(0.274 0.006 286.033); }
+    .litmus-back[data-theme="dark"] .button { --line: oklch(0.37 0.013 285.805); --head: oklch(0.274 0.006 286.033); color: oklch(0.967 0.001 286.375); }
     </style>
+    """
+
+    /// Two views of one page: the summary, first, and the viewer, behind
+    /// "Show details". A line in the summary opens its file in the viewer;
+    /// "← Summary" comes back. The viewer puts `#mutant` in the address as
+    /// soon as it loads, so only a route to a file or a test opens it
+    /// without a click. And both follow the viewer's theme switch, which
+    /// paints only the viewer, so the page behind is painted here too.
+    static let pageScript = """
+    <script>
+    (function () {
+      var app = document.querySelector("mutation-test-report-app");
+      var front = document.querySelector(".litmus");
+      var back = document.querySelector(".litmus-back");
+      if (!app || !front || !back) return;
+      var toFile = /^#(mutant|test)\\/./;
+      var detail = toFile.test(location.hash);
+      function show() {
+        front.hidden = detail;
+        back.hidden = !detail;
+        app.style.display = detail ? "" : "none";
+        window.scrollTo(0, 0);
+      }
+      document.addEventListener("click", function (event) {
+        var link = event.target.closest && event.target.closest("a");
+        if (!link) return;
+        var href = link.getAttribute("href") || "";
+        if (href === "#summary") {
+          event.preventDefault();
+          detail = false;
+          location.hash = "#mutant";
+          show();
+        } else if (front.contains(link) && /^#(mutant|test)/.test(href)) {
+          detail = true;
+          show();
+        }
+      });
+      window.addEventListener("hashchange", function () {
+        if (toFile.test(location.hash) && !detail) { detail = true; show(); }
+      });
+      function theme() {
+        var dark = (app.getAttribute("theme") || "") === "dark";
+        front.setAttribute("data-theme", dark ? "dark" : "light");
+        back.setAttribute("data-theme", dark ? "dark" : "light");
+        document.documentElement.style.background = dark ? "oklch(0.21 0.006 285.885)" : "";
+      }
+      new MutationObserver(theme).observe(app, { attributes: true, attributeFilter: ["theme"] });
+      theme();
+      show();
+    })();
+    </script>
     """
 
     // MARK: -
