@@ -152,7 +152,7 @@ public struct StrykerReport: Sendable {
                     """)
                     for survivor in gap.survivors {
                         rows.append("""
-                        <tr><td><a href="\(link(to: survivor.mutant.filePath))">\
+                        <tr class="line"><td><a href="\(link(to: survivor.mutant.filePath))">\
                         \(Self.escape(survivor.mutant.fileName)):\(survivor.mutant.line)</a></td>\
                         <td>\(survivor.gapKind.rawValue)</td>\
                         <td><code>\(Self.escape(Report.what(survivor.mutant).replacingOccurrences(of: "`", with: "")))</code></td>\
@@ -160,13 +160,14 @@ public struct StrykerReport: Sendable {
                         """)
                     }
                     if entry.unreached > 0 {
-                        rows.append("<tr><td colspan=\"4\" class=\"muted\">and \(entry.unreached) more in it no test reaches</td></tr>")
+                        rows.append("<tr class=\"line\"><td colspan=\"4\" class=\"muted\">and \(entry.unreached) more in it no test reaches</td></tr>")
                     }
                 }
             }
             parts.append(Self.table(
                 title: "What to test", note: "tests run through these and do not notice the change",
                 head: ["Where", "Kind", "Change", "What to add"],
+                widths: [26, 12, 32, 30],
                 rows: rows.joined(separator: "\n")
             ))
         }
@@ -214,13 +215,25 @@ public struct StrykerReport: Sendable {
 
     /// A section as the viewer draws its file table: a heading, then a table
     /// in a rounded border.
-    private static func table(title: String, note: String, head: [String], numbers: Set<Int> = [], rows: String) -> String {
+    ///
+    /// `widths` fixes the columns, for a table whose rows are not all
+    /// alike: sized by their contents, the columns of each part of it
+    /// fell in different places.
+    private static func table(
+        title: String,
+        note: String,
+        head: [String],
+        numbers: Set<Int> = [],
+        widths: [Int]? = nil,
+        rows: String
+    ) -> String {
         let cells = head.enumerated().map { index, name in
             "<th\(numbers.contains(index) ? " class=\"num\"" : "")>\(name)</th>"
         }.joined()
+        let columns = widths.map { "<colgroup>" + $0.map { "<col style=\"width: \($0)%\">" }.joined() + "</colgroup>" } ?? ""
         return """
         <h2>\(title) <small>\(escape(note))</small></h2>
-        <div class="frame"><table><thead><tr>\(cells)</tr></thead><tbody>
+        <div class="frame"><table\(widths == nil ? "" : " class=\"fixed\"")>\(columns)<thead><tr>\(cells)</tr></thead><tbody>
         \(rows)
         </tbody></table></div>
         """
@@ -261,7 +274,7 @@ public struct StrykerReport: Sendable {
     }
 
     /// The viewer's look, so the page reads as one: its container, which
-    /// is left-aligned and widens in steps rather than centred; its type,
+    /// widens in steps, here centred for both; its type,
     /// palette, borders and bar; and its light or dark theme, which the
     /// script below follows when its switch is pressed.
     static let frontStyle = """
@@ -277,11 +290,17 @@ public struct StrykerReport: Sendable {
       --fg: oklch(0.967 0.001 286.375); --muted: oklch(0.705 0.015 286.067); --line: oklch(0.37 0.013 285.805);
       --bg: oklch(0.21 0.006 285.885); --head: oklch(0.274 0.006 286.033);
     }
-    @media (min-width: 640px) { .litmus { max-width: 640px; } }
-    @media (min-width: 768px) { .litmus { max-width: 768px; } }
-    @media (min-width: 1024px) { .litmus { max-width: 1024px; } }
-    @media (min-width: 1280px) { .litmus { max-width: 1280px; } }
-    @media (min-width: 1536px) { .litmus { max-width: 1536px; } }
+    /* The viewer's container widens in steps and keeps to the left; its
+       element, which can be styled from outside, is given the same steps
+       and centred, so the viewer, the summary and the back link share one
+       centred column however wide the window is. */
+    .litmus, .litmus-back, mutation-test-report-app { display: block; margin-left: auto; margin-right: auto; }
+    .litmus[hidden], .litmus-back[hidden] { display: none; }
+    @media (min-width: 640px) { .litmus, .litmus-back, mutation-test-report-app { max-width: 640px; } }
+    @media (min-width: 768px) { .litmus, .litmus-back, mutation-test-report-app { max-width: 768px; } }
+    @media (min-width: 1024px) { .litmus, .litmus-back, mutation-test-report-app { max-width: 1024px; } }
+    @media (min-width: 1280px) { .litmus, .litmus-back, mutation-test-report-app { max-width: 1280px; } }
+    @media (min-width: 1536px) { .litmus, .litmus-back, mutation-test-report-app { max-width: 1536px; } }
     .litmus h1 { margin: 16px 0; font-size: 48px; line-height: 1; font-weight: 700; letter-spacing: -0.025em; }
     .litmus h1 span { margin-left: 16px; font-size: 38.4px; font-weight: 300; color: var(--muted); }
     .litmus h2 { margin: 32px 0 12px; font-size: 24px; font-weight: 700; letter-spacing: -0.015em; }
@@ -298,7 +317,11 @@ public struct StrykerReport: Sendable {
     .litmus .frame { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; }
     .litmus table { width: 100%; border-collapse: collapse; }
     .litmus th { padding: 12px 16px; font-weight: 700; text-align: left; white-space: nowrap; }
-    .litmus td { padding: 8px 16px; border-top: 1px solid var(--line); vertical-align: top; }
+    .litmus td { padding: 8px 16px; border-top: 1px solid var(--line); vertical-align: middle; }
+    .litmus table.fixed { table-layout: fixed; }
+    .litmus table.fixed td { overflow-wrap: anywhere; }
+    .litmus tr.function td { padding-left: 16px; }
+    .litmus tr.line td:first-child { padding-left: 40px; }
     .litmus .num { text-align: right; white-space: nowrap; }
     .litmus tr.group td { background: var(--head); }
     .litmus tr.group .muted { margin-left: 12px; }
@@ -306,7 +329,7 @@ public struct StrykerReport: Sendable {
     .litmus .badge { display: inline-block; margin-right: 8px; padding: 0 6px; border-radius: 4px;
       font-size: 11px; font-weight: 700; color: #fff; }
     .litmus .badge.bad { background: var(--bad); } .litmus .badge.warn { background: var(--warn); }
-    .litmus code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+    .litmus code { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
     .litmus a { color: inherit; text-decoration: none; } .litmus a:hover { text-decoration: underline; }
     .litmus details summary { cursor: pointer; color: var(--muted); }
     .litmus details table td { border-top: 0; padding: 4px 0; }
