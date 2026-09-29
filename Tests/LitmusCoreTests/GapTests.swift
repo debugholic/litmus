@@ -104,4 +104,16 @@ struct GapTests {
         #expect(rendered.contains("UNTESTED GameResult.handleRowTap(for:)  0 of 1 caught"))
         #expect(rendered.contains("A.swift:163  comparison   `a == b` → `a != b`"))
     }
+
+    @Test("plain report names the tests that passed a survivor")
+    func plainPassedBy() {
+        var survivor = result(163, .survived, in: "GameResult.handleRowTap(for:)")
+        survivor.coveredBy = ["하나", "둘", "셋", "넷"].enumerated().map {
+            TestRef(id: "App.T/t\($0.offset)()/ATests.swift:1:1", name: $0.element)
+        }
+
+        let rendered = try! Report(MutationRun.Summary(results: [survivor], duration: 1)).rendered(as: .plain)
+
+        #expect(rendered.contains("passed by: 하나, 둘, 셋 and 1 more"))
+    }
 }

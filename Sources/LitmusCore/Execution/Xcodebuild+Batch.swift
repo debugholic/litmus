@@ -169,7 +169,7 @@ extension Xcodebuild: BatchingHarness {
                     if id == Batch.baseline, verdict == .survived {
                         timeouts.learn(baseline: duration)
                     }
-                case .reached:
+                case .reached, .test, .covered, .killedBy:
                     break
                 }
             }

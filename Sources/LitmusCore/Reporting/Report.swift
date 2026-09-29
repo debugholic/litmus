@@ -83,10 +83,22 @@ public struct Report: Sendable {
                 let mutant = survivor.mutant
                 let kind = survivor.gapKind.rawValue.padding(toLength: kindWidth, withPad: " ", startingAt: 0)
                 lines.append("  \(location(of: survivor))  \(kind)  \(Self.what(mutant))")
+                if let passing = Self.passedThrough(by: survivor.coveredBy) {
+                    lines.append("      \(passing)")
+                }
             }
         }
 
         return lines.joined(separator: "\n")
+    }
+
+    /// The tests that ran through a survivor and passed anyway: the ones
+    /// that need the check. Three by name, and a count for the rest.
+    static func passedThrough(by tests: [TestRef]) -> String? {
+        guard !tests.isEmpty else { return nil }
+        let named = tests.prefix(3).map(\.name).joined(separator: ", ")
+        let more = tests.count > 3 ? " and \(tests.count - 3) more" : ""
+        return "passed by: \(named)\(more)"
     }
 
     /// The change in one line: the code before and after, or what was
@@ -136,6 +148,8 @@ public struct Report: Sendable {
                     "description": result.mutant.description,
                     "verdict": result.verdict.rawValue,
                     "duration": result.duration,
+                    "coveredBy": result.coveredBy.map(\.name),
+                    "killedBy": result.killedBy.map(\.name),
                 ] as [String: Any]
             },
         ]

@@ -23,6 +23,12 @@ public enum Batch {
         /// A mutant switch the tests passed through at least once, from the
         /// process's start to the end of the probe.
         case reached(String)
+        /// A test the probe listed, by its id and the name it was given.
+        case test(id: String, name: String)
+        /// The tests a mutant was run against: the ones that reach it.
+        case covered(String, tests: [String])
+        /// The tests that failed with the mutant on.
+        case killedBy(String, tests: [String])
     }
 
     /// How long to wait before deciding a launch or a mutant is stuck.
@@ -102,13 +108,20 @@ public enum Batch {
                 try? results.synchronize()
             }
 
-            func run(_ filter: [String]?) async -> CInt {
+            func run(_ filter: [String]?, stream: String? = nil) async -> CInt {
                 var arguments = __CommandLineArguments_v0()
                 arguments.parallel = false
                 arguments.quiet = true
                 arguments.filter = filter
+                if let stream {
+                    arguments.eventStreamOutputPath = stream
+                    arguments.eventStreamSchemaVersion = "0"
+                }
                 return await __swiftPMEntryPoint(passing: arguments)
             }
+
+            // Where a mutant's run says which tests failed.
+            let stream = NSTemporaryDirectory() + "litmus-run-\\(getpid()).jsonl"
 
             // Which tests reach each mutant, keyed by mutant id. Nil runs
             // every test for every mutant.
@@ -128,7 +141,11 @@ public enum Batch {
                     if let probeDirectory {
                         record("START \(probe)")
                         let probed = Date()
-                        reaching = await Self.probe(in: probeDirectory, run: run)
+                        let found = await Self.probe(in: probeDirectory) { await run($0) }
+                        reaching = found.reaching
+                        for (test, name) in found.names.sorted(by: { $0.key < $1.key }) {
+                            record("TEST\\t\\(Self.field(test))\\t\\(Self.field(name))")
+                        }
                         for id in Self.reached(in: probeDirectory) {
                             record("REACHED \\(id)")
                         }
@@ -155,9 +172,20 @@ public enum Batch {
 
                 setenv("\(MutationSwitch.activeVariable)", id, 1)
                 record("START \\(id)")
+                if let tests = reaching?[id] {
+                    record((["COVERED", id] + tests.map(Self.field)).joined(separator: "\\t"))
+                }
+                try? FileManager.default.removeItem(atPath: stream)
                 let started = Date()
-                let code = await run(filter)
-                record("END \\(id) \\(Self.verdict(code)) \\(Date().timeIntervalSince(started))")
+                let code = await run(filter, stream: stream)
+                let verdict = Self.verdict(code)
+                if verdict == "killed" {
+                    let failed = Self.failed(in: stream)
+                    if !failed.isEmpty {
+                        record((["KILLEDBY", id] + failed.map(Self.field)).joined(separator: "\\t"))
+                    }
+                }
+                record("END \\(id) \\(verdict) \\(Date().timeIntervalSince(started))")
             }
 
             unsetenv("\(MutationSwitch.activeVariable)")
@@ -179,7 +207,7 @@ public enum Batch {
         private static func probe(
             in directory: String,
             run: ([String]?) async -> CInt
-        ) async -> [String: [String]] {
+        ) async -> (reaching: [String: [String]], names: [String: String]) {
             let listing = directory + "/tests.jsonl"
             var arguments = __CommandLineArguments_v0()
             arguments.listTests = true
@@ -188,6 +216,7 @@ public enum Batch {
             let _: CInt = await __swiftPMEntryPoint(passing: arguments)
 
             var tests: [String] = []
+            var names: [String: String] = [:]
             for line in ((try? String(contentsOfFile: listing, encoding: .utf8)) ?? "").split(separator: "\\n") {
                 guard
                     let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
@@ -197,6 +226,8 @@ public enum Batch {
                     let id = payload["id"] as? String
                 else { continue }
                 tests.append(id)
+                // The name the test was given, `@Test("…")`, else its function.
+                names[id] = (payload["displayName"] as? String) ?? (payload["name"] as? String) ?? id
             }
 
             var reaching: [String: [String]] = [:]
@@ -213,7 +244,32 @@ public enum Batch {
 
             let map = reaching.map { ([$0.key] + $0.value).joined(separator: "\\t") }.joined(separator: "\\n")
             try? map.write(toFile: directory + "/map.tsv", atomically: true, encoding: .utf8)
-            return reaching
+            return (reaching, names)
+        }
+
+        /// The tests that recorded an issue in a run's event stream: the ones
+        /// the mutant made fail.
+        private static func failed(in stream: String) -> [String] {
+            var failed: [String] = []
+            for line in ((try? String(contentsOfFile: stream, encoding: .utf8)) ?? "").split(separator: "\\n") {
+                guard
+                    let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                    let payload = object["payload"] as? [String: Any],
+                    payload["kind"] as? String == "issueRecorded",
+                    let test = payload["testID"] as? String,
+                    !failed.contains(test)
+                else { continue }
+                // An issue the test expects, `withKnownIssue`, fails nothing.
+                if let issue = payload["issue"] as? [String: Any], issue["isKnown"] as? Bool == true { continue }
+                failed.append(test)
+            }
+            return failed
+        }
+
+        /// A field of a tab-separated line, with anything that would split it
+        /// flattened to a space.
+        private static func field(_ text: String) -> String {
+            text.map { $0 == "\\t" || $0 == "\\n" || $0 == "\\r" ? " " : $0 }.reduce(into: "") { $0.append($1) }
         }
 
         /// Every switch noted in any probe file, the one kept from launch
@@ -296,6 +352,19 @@ extension Batch {
         }
 
         static func parse(_ line: String) -> Event? {
+            // Tab-separated, since test names have spaces in them.
+            let fields = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+            switch fields.first {
+            case "TEST" where fields.count == 3:
+                return .test(id: fields[1], name: fields[2])
+            case "COVERED" where fields.count >= 2:
+                return .covered(fields[1], tests: Array(fields.dropFirst(2)))
+            case "KILLEDBY" where fields.count >= 2:
+                return .killedBy(fields[1], tests: Array(fields.dropFirst(2)))
+            default:
+                break
+            }
+
             let words = line.split(separator: " ").map(String.init)
 
             if words.count == 2, words[0] == "START" {

@@ -394,7 +394,12 @@ public struct MutationRun: Sendable {
         progress(.checkingBaseline)
 
         let outcomes = try await withThrowingTaskGroup(
-            of: (verdicts: [String: Verdict], durations: [String: TimeInterval], reached: Set<String>?).self
+            of: (
+                verdicts: [String: Verdict],
+                durations: [String: TimeInterval],
+                reached: Set<String>?,
+                tests: [String: (covered: [TestRef], killed: [TestRef])]
+            ).self
         ) { group in
             for (index, lane) in lanes.enumerated() {
                 let ids = (index == 0 ? [Batch.baseline] : []) + shares[index]
@@ -404,6 +409,11 @@ public struct MutationRun: Sendable {
                     var durations: [String: TimeInterval] = [:]
                     var reached: Set<String> = []
                     var probed = false
+                    var names: [String: String] = [:]
+                    var tests: [String: (covered: [TestRef], killed: [TestRef])] = [:]
+                    func refs(_ ids: [String]) -> [TestRef] {
+                        ids.map { TestRef(id: $0, name: names[$0] ?? $0) }
+                    }
                     let verdicts = try harness.runBatch(
                         plan, target: target, lane: lane, ids: ids, timeouts: Batch.Timeouts()
                     ) { event in
@@ -417,6 +427,12 @@ public struct MutationRun: Sendable {
                             progress(.probed(duration))
                         case let .reached(id):
                             reached.insert(id)
+                        case let .test(id, name):
+                            names[id] = name
+                        case let .covered(id, ids):
+                            tests[id, default: ([], [])].covered = refs(ids)
+                        case let .killedBy(id, ids):
+                            tests[id, default: ([], [])].killed = refs(ids)
                         case let .finished(Batch.baseline, verdict, duration):
                             if verdict == .survived { progress(.baselinePassed(duration)) }
                         case let .started(id):
@@ -424,25 +440,29 @@ public struct MutationRun: Sendable {
                         case let .finished(id, verdict, duration):
                             guard let mutant = byID[id] else { return }
                             durations[id] = duration
-                            let result = MutantResult(mutant: mutant, verdict: verdict, duration: duration)
+                            var result = MutantResult(mutant: mutant, verdict: verdict, duration: duration)
+                            result.coveredBy = tests[id]?.covered ?? []
+                            result.killedBy = tests[id]?.killed ?? []
                             progress(.finished(result, done: tally.next(), of: tally.total))
                         }
                     }
                     // Only a probe that finished has seen every switch the
                     // tests pass through.
-                    return (verdicts, durations, probed ? reached : nil)
+                    return (verdicts, durations, probed ? reached : nil, tests)
                 }
             }
 
             var verdicts: [String: Verdict] = [:]
             var durations: [String: TimeInterval] = [:]
             var reached: Set<String>?
+            var tests: [String: (covered: [TestRef], killed: [TestRef])] = [:]
             for try await outcome in group {
                 verdicts.merge(outcome.verdicts) { _, new in new }
                 durations.merge(outcome.durations) { _, new in new }
                 if let seen = outcome.reached { reached = (reached ?? []).union(seen) }
+                tests.merge(outcome.tests) { _, new in new }
             }
-            return (verdicts: verdicts, durations: durations, reached: reached)
+            return (verdicts: verdicts, durations: durations, reached: reached, tests: tests)
         }
 
         let baseline = outcomes.verdicts[Batch.baseline] ?? .error
@@ -451,11 +471,14 @@ public struct MutationRun: Sendable {
         }
 
         let results = batched.map { mutant in
-            MutantResult(
+            var result = MutantResult(
                 mutant: mutant,
                 verdict: outcomes.verdicts[mutant.switchName] ?? .error,
                 duration: outcomes.durations[mutant.switchName] ?? 0
             )
+            result.coveredBy = outcomes.tests[mutant.switchName]?.covered ?? []
+            result.killedBy = outcomes.tests[mutant.switchName]?.killed ?? []
+            return result
         }
 
         // A process of its own is a launch, half a minute on a simulator. One
