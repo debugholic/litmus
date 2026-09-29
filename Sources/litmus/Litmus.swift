@@ -182,17 +182,18 @@ struct Run: AsyncParsableCommand {
         with repair: BuildRepair,
         allTests: Bool,
         in working: URL
-    ) -> @Sendable (String, [Mutant]) throws -> [Mutant]? {
+    ) -> @Sendable (String, [Mutant]) throws -> MutationRun.BuildFix? {
         { log, mutants in
             let outcome = try repair(log: log, mutants: mutants)
-            if !outcome.changedNothing { return outcome.removed }
+            if !outcome.removed.isEmpty { return .removed(outcome.removed) }
+            if outcome.moved > 0 { return .moved }
 
             guard allTests else { return nil }
             let dropped = try AllTestsScheme.leaveOut(failedIn: log, in: working)
             guard !dropped.isEmpty else { return nil }
 
             print("  leaving out \(dropped.joined(separator: ", ")) — it does not build".yellow)
-            return []
+            return .removed([])
         }
     }
 

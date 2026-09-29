@@ -200,4 +200,28 @@ struct NewOperatorTests {
         #expect(result.source.contains("? (\"\") : (try await fetch()))"))
         #expect(isValidSwift(result.source))
     }
+
+    // MARK: - operator calls
+
+    /// The report shows the change `TokenOperator.replacements` names; the
+    /// helper is what runs. Written apart, they could say different things.
+    @Test("each operator's helper turns it into what the replacements say")
+    func helpersMatchReplacements() {
+        let replacements = TokenOperator.allCases.reduce(into: [String: String]()) { all, token in
+            all.merge(token.replacements) { first, _ in first }
+        }
+        let lines = OperatorCall.helpers.split(separator: "\n").filter { !$0.contains("_OptionalNilComparisonType") }
+
+        for (token, name) in OperatorCall.helperNames {
+            let replacement = replacements[token]
+            let declared = lines.filter { $0.contains("func \(name)<") || $0.contains("func \(name)(") }
+
+            #expect(replacement != nil, "no replacement for \(token)")
+            #expect(!declared.isEmpty, "no helper \(name)")
+            for line in declared {
+                #expect(line.contains("on ? ") && line.contains("a \(replacement ?? "?") b"), "\(name) does not turn \(token) into \(replacement ?? "?")")
+                #expect(line.contains(": a \(token) b") || line.contains(": try (a \(token) b"), "\(name) does not keep \(token)")
+            }
+        }
+    }
 }

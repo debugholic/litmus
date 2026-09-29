@@ -96,12 +96,23 @@ struct BuildRepairTests {
         """)
         let call = try #require(injected.mutants.first { $0.operator == "RemoveSideEffects" })
         let plus = try #require(injected.mutants.first { $0.description == "changed + to -" })
+        let lines = injected.text.split(separator: "\n", omittingEmptySubsequences: false)
         let line = injected.lineNumber(containing: plus)
+        let at = try #require(lines[line - 1].range(of: "Date()")).lowerBound.utf16Offset(in: lines[line - 1]) + 1
 
-        let outcome = try injected.repair("\(injected.file):\(line):22: error: cannot convert value of type 'Date'")
+        let outcome = try injected.repair("\(injected.file):\(line):\(at): error: cannot convert value of type 'Date'")
 
         #expect(outcome.removed.isEmpty)
         #expect(outcome.moved == 1)
+        #expect(injected.text.contains(MutationSwitch.flagName(call.switchName)))
+
+        // The copy fails too: only the switch the error is inside comes out.
+        let copied = injected.text.split(separator: "\n", omittingEmptySubsequences: false)
+        let row = try #require(copied.firstIndex { $0.contains("(\(MutationSwitch.flagName(plus.switchName)) ?") })
+        let column = try #require(copied[row].range(of: "Date() - delay")).lowerBound.utf16Offset(in: copied[row]) + 1
+        let second = try injected.repair("\(injected.file):\(row + 1):\(column): error: binary operator '-' cannot be applied")
+
+        #expect(second.removed == [plus])
         #expect(injected.text.contains(MutationSwitch.flagName(call.switchName)))
     }
 
@@ -116,8 +127,8 @@ struct BuildRepairTests {
         let y = 1
         """.write(to: file, atomically: true, encoding: .utf8)
 
-        #expect(BuildRepair.enclosingCallFlag(at: (file.path, 2, 7), in: file.path) == "__litmus_inner")
-        #expect(BuildRepair.enclosingCallFlag(at: (file.path, 3, 9), in: file.path) == nil)
+        #expect(BuildRepair.innermostFlag(at: (file.path, 2, 7)) == "__litmus_inner")
+        #expect(BuildRepair.innermostFlag(at: (file.path, 3, 9)) == nil)
     }
 
     @Test("takes out the whole file when the line has no switch on it")
@@ -125,13 +136,11 @@ struct BuildRepairTests {
         let injected = try Injected(Self.source)
 
         let first = try injected.repair("\(injected.file):1:1: error: something further down broke")
-        let second = try injected.repair("\(injected.file):1:1: error: something further down broke")
 
-        // Operators go back to copies first, and nothing is taken out while
-        // they might be the fault; what is left goes the second time.
-        #expect(first.moved == 3)
-        #expect(first.removed.isEmpty)
-        #expect(Set((first.removed + second.removed).map(\.switchName)) == Set(injected.mutants.map(\.switchName)))
+        // An error no switch is around is not a call's: nothing is moved
+        // back, and the file's mutants come out at once.
+        #expect(first.moved == 0)
+        #expect(Set(first.removed.map(\.switchName)) == Set(injected.mutants.map(\.switchName)))
         #expect(injected.text == Self.source)
     }
 
