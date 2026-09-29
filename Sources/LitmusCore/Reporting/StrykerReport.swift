@@ -171,9 +171,21 @@ public struct StrykerReport: Sendable {
 
     /// The viewer's route to a file. Encoded: a `#`, a space or a `%` in the
     /// path would end the route or be read as an escape.
+    ///
+    /// Under the folder every file shares, as the viewer names them: it
+    /// drops that folder from its routes, and `#mutant/Sources/…` opened
+    /// nothing.
     private func link(to path: String) -> String {
-        let route = relative(path).addingPercentEncoding(withAllowedCharacters: Self.routeAllowed) ?? relative(path)
+        let shared = viewerRoot
+        let relative = relative(path)
+        let named = relative.hasPrefix(shared) ? String(relative.dropFirst(shared.count)) : relative
+        let route = named.addingPercentEncoding(withAllowedCharacters: Self.routeAllowed) ?? named
         return "#mutant/" + Self.escape(route)
+    }
+
+    /// The folder every file in the report shares, with its trailing slash.
+    private var viewerRoot: String {
+        MutationRun.Summary.commonDirectory(of: Array(Set(summary.results.map { relative($0.mutant.filePath) })))
     }
 
     private static let routeAllowed = CharacterSet.urlPathAllowed.subtracting(CharacterSet(charactersIn: "#?%"))

@@ -175,6 +175,20 @@ struct StrykerReportTests {
         )
     }
 
+    /// The viewer names files under the folder they all share; a link that
+    /// kept it opened nothing.
+    @Test("links under the folder every file shares, as the viewer routes them")
+    func frontLinksDropSharedFolder() {
+        let copy = URL(fileURLWithPath: "/tmp/copy")
+        let html = front([
+            result(.noCoverage, at: "/tmp/copy/Sources/Shared/UI/KernButton.swift"),
+            result(.noCoverage, at: "/tmp/copy/Sources/Feature/A.swift"),
+        ], copy: copy)
+
+        #expect(html.contains("href=\"#mutant/Shared/UI/KernButton.swift\""))
+        #expect(!html.contains("#mutant/Sources/"))
+    }
+
     @Test("draws no bar when the tests reach nothing, rather than a red one")
     func frontNothingReached() {
         let copy = URL(fileURLWithPath: "/tmp/copy")
