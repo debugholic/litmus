@@ -148,4 +148,53 @@ struct GapTests {
         #expect(!(try! reached.rendered(as: .plain)).contains("mutation score"))
         #expect((try! partly.rendered(as: .plain)).contains("mutation score 25% — caught of every mutant, reached or not"))
     }
+
+    // MARK: - what to test
+
+    /// Listed together, one project's report named 702 functions, and the
+    /// dozen whose tests run and check nothing were lost among them.
+    @Test("puts functions tests run through apart from code no test reaches")
+    func plan() {
+        let plan = TestPlan([
+            result(1, .survived, in: "A.checked()"),
+            result(2, .noCoverage, in: "A.checked()"),
+            result(3, .noCoverage, in: "A.unreached()"),
+            result(4, .noCoverage, in: "B.other()", file: "/p/B.swift"),
+            result(5, .noCoverage, in: "B.other()", file: "/p/B.swift"),
+        ])
+
+        #expect(plan.unchecked.map(\.gap.name) == ["A.checked()"])
+        #expect(plan.unchecked.first?.gap.survivors.map(\.mutant.line) == [1])
+        #expect(plan.unchecked.first?.unreached == 1)
+        #expect(plan.unreached.map(\.path) == ["/p/A.swift", "/p/B.swift"] || plan.unreached.map(\.path) == ["/p/B.swift", "/p/A.swift"])
+        #expect(plan.unreached.map(\.count) == [2, 2])
+        #expect(plan.unreachedTotal == 4)
+    }
+
+    @Test("keeps two functions of one name in different files apart")
+    func planSameName() {
+        let plan = TestPlan([
+            result(1, .survived, in: "format(_:)"),
+            result(2, .noCoverage, in: "format(_:)"),
+            result(3, .noCoverage, in: "format(_:)"),
+            result(1, .survived, in: "format(_:)", file: "/p/B.swift"),
+        ])
+
+        #expect(plan.unchecked.map(\.unreached).sorted() == [0, 2])
+    }
+
+    @Test("plain report counts code no test reaches by file, and leaves it out of what to test")
+    func plainUnreached() {
+        let rendered = try! Report(MutationRun.Summary(results: [
+            result(1, .survived, in: "A.checked()"),
+            result(3, .noCoverage, in: "A.unreached()"),
+            result(4, .noCoverage, in: "B.other()", file: "/p/B.swift"),
+            result(5, .noCoverage, in: "B.other()", file: "/p/B.swift"),
+        ], duration: 1)).rendered(as: .plain)
+
+        #expect(rendered.contains("what to test — 1 untested, 0 partly tested:"))
+        #expect(!rendered.contains("A.unreached()"))
+        #expect(rendered.contains("no test reaches — 3 mutant(s) in 2 file(s), most first:"))
+        #expect(rendered.contains("  2  B.swift"))
+    }
 }

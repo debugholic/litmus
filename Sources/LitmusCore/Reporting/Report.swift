@@ -86,29 +86,24 @@ public struct Report: Sendable {
     private func unchecked(_ plan: TestPlan) -> [String] {
         guard !plan.unchecked.isEmpty else { return [] }
 
-        let untested = plan.unchecked.count { $0.status == .untested }
+        let untested = plan.unchecked.count { $0.gap.status == .untested }
         var lines = ["", "what to test — \(untested) untested, \(plan.unchecked.count - untested) partly tested:"]
 
         let kindWidth = GapKind.allCases.map(\.rawValue.count).max() ?? 0
-        for gap in plan.unchecked {
+        for entry in plan.unchecked {
+            let gap = entry.gap
             lines.append("")
             lines.append("\(gap.status.rawValue.padding(toLength: 9, withPad: " ", startingAt: 0))"
                 + "\(gap.name)  \(gap.caught) of \(gap.scored) caught")
-            // Once for the function: its survivors are mostly passed by the
-            // same tests, and a line under each said the same thing again.
-            var passing: [TestRef] = []
-            for test in gap.survivors.flatMap(\.coveredBy) where !passing.contains(test) {
-                passing.append(test)
-            }
-            if let line = Self.passedThrough(by: passing) {
+            if let line = Self.passedThrough(by: entry.passedBy) {
                 lines.append("  \(line)")
             }
             for survivor in gap.survivors {
                 let kind = survivor.gapKind.rawValue.padding(toLength: kindWidth, withPad: " ", startingAt: 0)
                 lines.append("  \(location(of: survivor))  \(kind)  \(Self.what(survivor.mutant))")
             }
-            if let more = plan.unreachedIn[gap.name], more > 0 {
-                lines.append("  and \(more) more in it no test reaches")
+            if entry.unreached > 0 {
+                lines.append("  and \(entry.unreached) more in it no test reaches")
             }
         }
         return lines
@@ -146,15 +141,15 @@ public struct Report: Sendable {
 
         var lines = ["", "slowest tests — each runs once for every mutant it reaches:"]
         for score in timed {
-            let cost = seconds(score.cost ?? 0)
-            let each = seconds(score.test.duration ?? 0)
+            let cost = Self.seconds(score.cost ?? 0)
+            let each = Self.seconds(score.test.duration ?? 0)
             lines.append("  \(String(repeating: " ", count: max(0, 7 - cost.count)))\(cost)"
                 + "  \(each) × \(score.reached)  \(score.test.name)")
         }
         return lines
     }
 
-    private func seconds(_ value: TimeInterval) -> String {
+    static func seconds(_ value: TimeInterval) -> String {
         value < 10 ? String(format: "%.1fs", value) : "\(Int(value.rounded()))s"
     }
 

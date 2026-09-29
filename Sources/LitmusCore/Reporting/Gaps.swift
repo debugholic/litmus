@@ -107,30 +107,42 @@ public struct FunctionGap: Sendable {
 /// nothing were somewhere in the middle. Those come first, in full; code no
 /// test reaches is counted by file.
 public struct TestPlan: Sendable {
-    /// Functions a test runs through where a change went unnoticed, with
-    /// only those survivors, untested ones first.
-    public let unchecked: [FunctionGap]
-    /// For each function in `unchecked`, by name, how many of its mutants
-    /// no test reaches.
-    public let unreachedIn: [String: Int]
+    /// A function a test runs through where a change went unnoticed.
+    public struct Entry: Sendable {
+        /// With only the survivors a test ran through.
+        public let gap: FunctionGap
+        /// The tests that ran through them, each once, in the order met.
+        public let passedBy: [TestRef]
+        /// Its other mutants, the ones no test reaches.
+        public let unreached: Int
+    }
+
+    /// Untested ones first.
+    public let unchecked: [Entry]
     /// Mutants no test reaches, by file, most first.
     public let unreached: [(path: String, count: Int)]
 
     public init(_ results: [MutantResult]) {
-        var unreachedIn: [String: Int] = [:]
         unchecked = FunctionGap.find(in: results).compactMap { gap in
             let survived = gap.survivors.filter { $0.verdict == .survived }
             guard !survived.isEmpty else { return nil }
-            unreachedIn[gap.name] = gap.survivors.count - survived.count
-            return FunctionGap(
-                filePath: gap.filePath,
-                name: gap.name,
-                caught: gap.caught,
-                scored: gap.caught + survived.count,
-                survivors: survived
+
+            var passedBy: [TestRef] = []
+            for test in survived.flatMap(\.coveredBy) where !passedBy.contains(where: { $0.id == test.id }) {
+                passedBy.append(test)
+            }
+            return Entry(
+                gap: FunctionGap(
+                    filePath: gap.filePath,
+                    name: gap.name,
+                    caught: gap.caught,
+                    scored: gap.caught + survived.count,
+                    survivors: survived
+                ),
+                passedBy: passedBy,
+                unreached: gap.survivors.count - survived.count
             )
         }
-        self.unreachedIn = unreachedIn
 
         unreached = Dictionary(grouping: results.filter { $0.verdict == .noCoverage }, by: \.mutant.filePath)
             .map { (path: $0.key, count: $0.value.count) }

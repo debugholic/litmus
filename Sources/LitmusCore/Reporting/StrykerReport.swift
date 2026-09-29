@@ -80,27 +80,29 @@ public struct StrykerReport: Sendable {
         <div><b>\(strength)</b><span>test strength</span><small>caught \(caught) of the \(reached) mutants the tests reach</small></div>
         <div><b>\(whole)</b><span>mutation score</span><small>caught \(caught) of all \(caught + summary.survived + summary.noCoverage)</small></div>
         </section>
+        \(reached > 0 ? """
         <div class="bar" title="caught \(caught), survived \(summary.survived)"><i style="width: \(String(format: "%.1f", share))%"></i></div>
+        """ : "")
         <p class="counts">caught \(caught) · survived \(summary.survived) · no test reaches \(summary.noCoverage)\(summary.unviable > 0 ? " · did not build \(summary.unviable)" : "")</p>
         """)
 
         if !plan.unchecked.isEmpty {
             var rows: [String] = []
-            for gap in plan.unchecked {
-                var passing: [TestRef] = []
-                for test in gap.survivors.flatMap(\.coveredBy) where !passing.contains(test) { passing.append(test) }
+            for entry in plan.unchecked {
+                let gap = entry.gap
+                let passing = entry.passedBy
                 let passedBy = passing.isEmpty ? "" : """
                 <p class="tests">passed by \(passing.prefix(3).map { Self.escape($0.name) }.joined(separator: ", "))\(passing.count > 3 ? " and \(passing.count - 3) more" : "")</p>
                 """
                 let survivors = gap.survivors.map { survivor in
                     """
-                    <li><a href="#mutant/\(Self.escape(relative(survivor.mutant.filePath)))">\(Self.escape(survivor.mutant.fileName)):\(survivor.mutant.line)</a> \
+                    <li><a href="\(link(to: survivor.mutant.filePath))">\(Self.escape(survivor.mutant.fileName)):\(survivor.mutant.line)</a> \
                     <em>\(survivor.gapKind.rawValue)</em> <code>\(Self.escape(Report.what(survivor.mutant)))</code> \
                     <small>\(survivor.gapKind.hint)</small></li>
                     """
                 }.joined(separator: "\n")
-                let more = (plan.unreachedIn[gap.name] ?? 0) > 0
-                    ? "<p class=\"tests\">and \(plan.unreachedIn[gap.name] ?? 0) more in it no test reaches</p>" : ""
+                let more = entry.unreached > 0
+                    ? "<p class=\"tests\">and \(entry.unreached) more in it no test reaches</p>" : ""
                 rows.append("""
                 <article><h3><span class="\(gap.status == .untested ? "untested" : "partial")">\(gap.status.rawValue)</span> \
                 \(Self.escape(gap.name)) <small>\(gap.caught) of \(gap.scored) caught</small></h3>
@@ -115,7 +117,7 @@ public struct StrykerReport: Sendable {
 
         if !plan.unreached.isEmpty {
             let row = { (file: (path: String, count: Int)) in
-                "<li><b>\(file.count)</b> <a href=\"#mutant/\(Self.escape(self.relative(file.path)))\">\(Self.escape(self.relative(file.path)))</a></li>"
+                "<li><b>\(file.count)</b> <a href=\"\(self.link(to: file.path))\">\(Self.escape(self.relative(file.path)))</a></li>"
             }
             let shown = plan.unreached.prefix(10).map(row).joined(separator: "\n")
             let rest = plan.unreached.dropFirst(10)
@@ -131,8 +133,8 @@ public struct StrykerReport: Sendable {
         let costly = summary.tests.filter { $0.cost != nil }.prefix(5)
         if !costly.isEmpty {
             let rows = costly.map { score in
-                let cost = String(format: "%.1fs", score.cost ?? 0)
-                let each = String(format: "%.1fs", score.test.duration ?? 0)
+                let cost = Report.seconds(score.cost ?? 0)
+                let each = Report.seconds(score.test.duration ?? 0)
                 return "<li><b>\(cost)</b> \(each) × \(score.reached) \(Self.escape(score.test.name))</li>"
             }.joined(separator: "\n")
             parts.append("""
@@ -144,7 +146,16 @@ public struct StrykerReport: Sendable {
         return "<header class=\"litmus\">\n\(parts.joined(separator: "\n"))\n</header>"
     }
 
-    private static func escape(_ text: String) -> String {
+    /// The viewer's route to a file. Encoded: a `#`, a space or a `%` in the
+    /// path would end the route or be read as an escape.
+    private func link(to path: String) -> String {
+        let route = relative(path).addingPercentEncoding(withAllowedCharacters: Self.routeAllowed) ?? relative(path)
+        return "#mutant/" + Self.escape(route)
+    }
+
+    private static let routeAllowed = CharacterSet.urlPathAllowed.subtracting(CharacterSet(charactersIn: "#?%"))
+
+    static func escape(_ text: String) -> String {
         text.replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;")
