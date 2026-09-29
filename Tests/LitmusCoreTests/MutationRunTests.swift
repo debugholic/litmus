@@ -269,6 +269,8 @@ struct MutationRunTests {
         /// Keyed by target, then switch name; anything missing survives.
         let kills: [String: Set<String>]
         let redBaselines: Set<String>
+        /// Targets whose runner never comes up.
+        var unlaunchable: Set<String> = []
         /// Switches a finished probe reports reached, or nil for no probe.
         let reached: Set<String>?
         /// Tests reaching each switch, reported by a probe, by test id.
@@ -337,6 +339,9 @@ struct MutationRunTests {
             lock.lock()
             defer { lock.unlock() }
             batched[target, default: []].append(contentsOf: ids)
+            if unlaunchable.contains(target) {
+                throw Xcodebuild.Failure(description: "the batch made no progress")
+            }
 
             for test in Set(covering.values.joined()) {
                 onEvent(.test(id: test, name: "name of \(test)"))
@@ -505,6 +510,26 @@ struct MutationRunTests {
             kills: ["BTests": [inB.switchName]],
             redBaselines: ["ATests"]
         )
+
+        let summary = try await MutationRun(configuration: .init(harness: harness, lanes: ["a"]))([inA, inB])
+
+        #expect(summary.results.first { $0.mutant == inA }?.verdict == .error)
+        #expect(summary.results.first { $0.mutant == inB }?.verdict == .killed)
+    }
+
+    @Test("passes over a target whose runner will not launch, and runs the rest")
+    func unlaunchableTarget() async throws {
+        let a = try TestSource(), b = try TestSource()
+        let inA = mutant(1, in: "/project/A.swift")
+        let inB = mutant(2, in: "/project/B.swift")
+        let harness = TargetStub(
+            targets: [
+                .init(name: "ATests", files: [a.url.path], aimedAt: ["/project/A.swift"]),
+                .init(name: "BTests", files: [b.url.path], aimedAt: ["/project/B.swift"]),
+            ],
+            kills: ["BTests": [inB.switchName]]
+        )
+        harness.unlaunchable = ["ATests"]
 
         let summary = try await MutationRun(configuration: .init(harness: harness, lanes: ["a"]))([inA, inB])
 

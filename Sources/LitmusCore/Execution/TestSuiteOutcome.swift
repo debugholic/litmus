@@ -31,6 +31,14 @@ struct TestSuiteOutcome {
             return
         }
 
+        // The runner never came up: a simulator that would not boot, a spawn
+        // launchd refused. No test ran with the mutant on, and reading the bad
+        // exit below as a kill would score the machine's trouble as a catch.
+        if Self.failedToLaunch(log), !Self.crashed(log) {
+            verdict = .error
+            return
+        }
+
         // A trap in the mutated code takes the process down before the testing
         // library prints anything, so the crash is read next. It is a kill: the
         // suite ran into the change rather than past it.
@@ -60,13 +68,20 @@ struct TestSuiteOutcome {
     }
 
     /// Whether a summary line says the run failed, or `nil` when there is none.
+    ///
+    /// Every summary is read: a target with both kinds of test prints one of
+    /// each, and a mutant only an XCTest case caught was a survivor when the
+    /// Swift Testing summary, which passed, was the only one looked at.
     private static func summarySaysFailed(in log: String) -> Bool? {
+        var found = false
+
         // swift-testing: Test run with 73 tests in 9 suites passed after ...
         if let range = log.range(
             of: #"Test run with \d+ tests? in \d+ suites? (?:passed|failed)"#,
             options: .regularExpression
         ) {
-            return log[range].contains("failed")
+            if log[range].contains("failed") { return true }
+            found = true
         }
 
         // XCTest: Executed 73 tests, with 1 failure ...
@@ -78,10 +93,21 @@ struct TestSuiteOutcome {
         for match in log.matches(
             of: #"Executed (\d+) tests?, with (\d+) failures?"#
         ) where match.tests > 0 {
-            return match.failures > 0
+            if match.failures > 0 { return true }
+            found = true
         }
 
-        return nil
+        return found ? false : nil
+    }
+
+    /// Messages xcodebuild prints when the test runner never started.
+    private static func failedToLaunch(_ log: String) -> Bool {
+        [
+            "Process spawn via launchd failed",
+            "Unable to boot",
+            "Failed to install or launch the test runner",
+            "Unable to find a destination matching",
+        ].contains { log.contains($0) }
     }
 
     private static func failedToBuild(_ log: String) -> Bool {

@@ -103,4 +103,50 @@ struct TestSuiteOutcomeTests {
     func cleanExitWithoutSummary() {
         #expect(TestSuiteOutcome(log: "nothing useful here", status: 0).verdict == .error)
     }
+
+    /// The runner not coming up says nothing about the mutant; a kill here
+    /// scores the machine's trouble as the tests' catch.
+    @Test("a runner that never launched is an error, not a kill")
+    func launchFailure() {
+        let log = """
+        2026-09-28 11:46:08.499 xcodebuild[79954:468276] [MT] IDELaunchReport: Launching HackersTests Finished with error: Process spawn via launchd failed.
+        Testing failed:
+        ** TEST EXECUTE FAILED **
+        """
+
+        #expect(TestSuiteOutcome(log: log, status: 65).verdict == .error)
+    }
+
+    @Test("a crash is still a kill when the launch report mentions it")
+    func crashAfterLaunch() {
+        let log = """
+        Fatal error: Index out of range
+        Unable to boot the Simulator.
+        """
+
+        #expect(TestSuiteOutcome(log: log, status: 134).verdict == .killed)
+    }
+
+    /// A target with both kinds of test prints both summaries.
+    @Test("a failing XCTest case kills the mutant even when Swift Testing passed")
+    func mixedFrameworks() {
+        let log = """
+        ✔ Test run with 12 tests in 3 suites passed after 0.4 seconds.
+        Executed 5 tests, with 1 failure (0 unexpected) in 0.2 seconds
+        ** TEST FAILED **
+        """
+
+        #expect(TestSuiteOutcome(log: log, status: 65).verdict == .killed)
+    }
+
+    @Test("both summaries passing is a survivor")
+    func mixedFrameworksPass() {
+        let log = """
+        ✔ Test run with 12 tests in 3 suites passed after 0.4 seconds.
+        Executed 5 tests, with 0 failures (0 unexpected) in 0.2 seconds
+        ** TEST SUCCEEDED **
+        """
+
+        #expect(TestSuiteOutcome(log: log, status: 0).verdict == .survived)
+    }
 }
