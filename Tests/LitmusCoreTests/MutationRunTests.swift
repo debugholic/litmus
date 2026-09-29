@@ -444,6 +444,37 @@ struct MutationRunTests {
         #expect(byMutant[missed.switchName]?.killedBy.isEmpty == true)
     }
 
+    /// With the first lane alone probing, a mutant no test reaches came out
+    /// as no coverage on one lane and a survivor on another.
+    @Test("gives every lane its own baseline and probe")
+    func everyLaneProbes() async throws {
+        let source = try TestSource()
+        let mutants = (1...4).map { mutant($0, in: "/project/A.swift") }
+        let harness = TargetStub(targets: [
+            .init(name: "ATests", files: [source.url.path], aimedAt: ["/project/A.swift"]),
+        ])
+
+        let summary = try await MutationRun(configuration: .init(harness: harness, lanes: ["a", "b"]))(mutants)
+
+        #expect(harness.batched["ATests"]?.filter { $0 == Batch.baseline }.count == 2)
+        #expect(summary.results.count == 4)
+    }
+
+    @Test("fails a target when any lane's baseline is red")
+    func anyLaneRed() async throws {
+        let source = try TestSource()
+        let harness = TargetStub(
+            targets: [.init(name: "ATests", files: [source.url.path], aimedAt: ["/project/A.swift"])],
+            redBaselines: ["ATests"]
+        )
+
+        await #expect(throws: MutationRun.Failure.self) {
+            try await MutationRun(configuration: .init(harness: harness, lanes: ["a", "b"]))(
+                (1...4).map { self.mutant($0, in: "/project/A.swift") }
+            )
+        }
+    }
+
     @Test("runs each mutant in the target aimed at its file")
     func routesByTarget() async throws {
         let a = try TestSource(), b = try TestSource()

@@ -78,6 +78,20 @@ public struct MutationRun: Sendable {
             return Double(caught) / Double(total) * 100
         }
 
+        /// What falls short of the thresholds given, one sentence each; empty
+        /// when nothing does. A score with nothing to measure — no mutant the
+        /// tests reach — falls short of nothing: there is nothing to judge.
+        public func shortfalls(testStrength least: Double?, mutationScore wholeLeast: Double?) -> [String] {
+            var found: [String] = []
+            if let least, let score = testStrength, score < least {
+                found.append("Litmus score \(Int(score.rounded()))% is under \(Int(least.rounded()))%")
+            }
+            if let wholeLeast, let score = mutationScore, score < wholeLeast {
+                found.append("mutation score \(Int(score.rounded()))% is under \(Int(wholeLeast.rounded()))%")
+            }
+            return found
+        }
+
         /// A score for each file, weakest first.
         public var files: [FileScore] {
             let paths = results.map(\.mutant.filePath)
@@ -448,8 +462,14 @@ public struct MutationRun: Sendable {
             ).self
         ) { group in
             for (index, lane) in lanes.enumerated() {
-                let ids = (index == 0 ? [Batch.baseline] : []) + shares[index]
-                guard !ids.isEmpty else { continue }
+                // Every lane checks the suite and probes for itself. With the
+                // first alone probing, a mutant no test reaches came out as no
+                // coverage on one lane and a survivor on the others, and the
+                // score moved with how the mutants were dealt. The lanes run
+                // side by side, so it costs no time.
+                guard index == 0 || !shares[index].isEmpty else { continue }
+                let ids = [Batch.baseline] + shares[index]
+                let lead = index == 0
 
                 group.addTask {
                     var durations: [String: TimeInterval] = [:]
@@ -468,10 +488,10 @@ public struct MutationRun: Sendable {
                         case .started(Batch.baseline):
                             break
                         case .started(Batch.probe):
-                            progress(.probing)
+                            if lead { progress(.probing) }
                         case let .finished(Batch.probe, verdict, duration):
                             probed = verdict == .survived
-                            progress(.probed(duration))
+                            if lead { progress(.probed(duration)) }
                         case let .reached(id):
                             reached.insert(id)
                         case let .test(id, name):
@@ -483,7 +503,7 @@ public struct MutationRun: Sendable {
                         case let .killedBy(id, ids):
                             tests[id, default: ([], [])].killed = refs(ids)
                         case let .finished(Batch.baseline, verdict, duration):
-                            if verdict == .survived { progress(.baselinePassed(duration)) }
+                            if lead, verdict == .survived { progress(.baselinePassed(duration)) }
                         case let .started(id):
                             if let mutant = byID[id] { progress(.started(mutant)) }
                         case let .finished(id, verdict, duration):
@@ -506,7 +526,13 @@ public struct MutationRun: Sendable {
             var reached: Set<String>?
             var tests: [String: (covered: [TestRef], killed: [TestRef])] = [:]
             for try await outcome in group {
+                // Every lane has its own baseline; one that did not pass is
+                // the verdict, whichever lane finished last.
+                let base = [verdicts[Batch.baseline], outcome.verdicts[Batch.baseline]]
+                    .compactMap { $0 }
+                    .first { $0 != .survived } ?? outcome.verdicts[Batch.baseline] ?? verdicts[Batch.baseline]
                 verdicts.merge(outcome.verdicts) { _, new in new }
+                verdicts[Batch.baseline] = base
                 durations.merge(outcome.durations) { _, new in new }
                 if let seen = outcome.reached { reached = (reached ?? []).union(seen) }
                 tests.merge(outcome.tests) { _, new in new }

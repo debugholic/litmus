@@ -51,6 +51,12 @@ struct Run: AsyncParsableCommand {
     @Option(help: "Write the report here instead of stdout.")
     var output: String?
 
+    @Option(help: "Exit with a failure when the Litmus score is under this percentage.")
+    var failUnder: Double?
+
+    @Option(help: "Exit with a failure when the mutation score, over every mutant, is under this percentage.")
+    var failUnderMutationScore: Double?
+
     func run() async throws {
         let project = URL(fileURLWithPath: project).standardizedFileURL
 
@@ -135,6 +141,13 @@ struct Run: AsyncParsableCommand {
             encoding: .utf8
         )
         print("\n  report: \(Self.link(to: html))")
+
+        // After the reports, so a failing run still leaves them to read.
+        let shortfalls = summary.shortfalls(testStrength: failUnder, mutationScore: failUnderMutationScore)
+        if !shortfalls.isEmpty {
+            for shortfall in shortfalls { print("  \(shortfall)".red) }
+            throw ExitCode(2)
+        }
     }
 
     /// A `file://` address with spaces escaped, so a terminal makes the whole
