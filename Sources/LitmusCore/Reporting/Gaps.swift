@@ -45,7 +45,7 @@ extension Mutant {
                 : .boundary
         case "RemoveSideEffects":
             return .sideEffect
-        case "ChangeArithmeticOperator", "FlipBooleanLiteral":
+        case "ChangeArithmeticOperator", "FlipBooleanLiteral", "ReplaceReturnValue":
             return .value
         default:
             return .branch

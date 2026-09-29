@@ -9,10 +9,13 @@ public enum MutationOperator: Equatable, Sendable, CaseIterable {
     case flipBooleanLiteral
     /// `if x` to `if !x`, and the same for `guard` and `while`.
     case negateCondition
+    /// `return x` to `return nil`, `false`, `0`, `""`, `[]` or `[:]`, by the
+    /// declared return type.
+    case replaceReturnValue
 
     public static var allCases: [MutationOperator] {
         TokenOperator.allCases.map(MutationOperator.token)
-            + [.swapTernary, .removeSideEffects, .flipBooleanLiteral, .negateCondition]
+            + [.swapTernary, .removeSideEffects, .flipBooleanLiteral, .negateCondition, .replaceReturnValue]
     }
 
     public var name: String {
@@ -22,6 +25,7 @@ public enum MutationOperator: Equatable, Sendable, CaseIterable {
         case .removeSideEffects: return "RemoveSideEffects"
         case .flipBooleanLiteral: return "FlipBooleanLiteral"
         case .negateCondition: return "NegateCondition"
+        case .replaceReturnValue: return "ReplaceReturnValue"
         }
     }
 
@@ -36,6 +40,8 @@ public enum MutationOperator: Equatable, Sendable, CaseIterable {
             self = .flipBooleanLiteral
         } else if name == "NegateCondition" {
             self = .negateCondition
+        } else if name == "ReplaceReturnValue" {
+            self = .replaceReturnValue
         } else {
             return nil
         }

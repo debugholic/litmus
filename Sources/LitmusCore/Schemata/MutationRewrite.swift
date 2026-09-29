@@ -1,11 +1,14 @@
+import SwiftParser
 import SwiftSyntax
 
 /// Applies every mutation in one pass, leaving each one switched off.
 struct MutationRewrite {
     let sites: [SourceSpan: [MutationSite]]
+    /// Sites to switch by copying their expression; see `OperatorCall`.
+    var copied: Set<String> = []
 
     func callAsFunction(_ tree: SourceFileSyntax) -> SourceFileSyntax {
-        Rewriter(sites: sites).rewrite(tree).as(SourceFileSyntax.self) ?? tree
+        Rewriter(sites: sites, copied: copied).rewrite(tree).as(SourceFileSyntax.self) ?? tree
     }
 }
 
@@ -16,9 +19,11 @@ struct MutationRewrite {
 /// matching.
 private final class Rewriter: SyntaxRewriter {
     private let sites: [SourceSpan: [MutationSite]]
+    private let copied: Set<String>
 
-    init(sites: [SourceSpan: [MutationSite]]) {
+    init(sites: [SourceSpan: [MutationSite]], copied: Set<String>) {
         self.sites = sites
+        self.copied = copied
     }
 
     override func visit(_ node: SequenceExprSyntax) -> ExprSyntax {
@@ -27,7 +32,7 @@ private final class Rewriter: SyntaxRewriter {
 
         guard let found = sites[span], !found.isEmpty else { return base }
 
-        return MutationSwitch.expression(found, around: base)
+        return MutationSwitch.expression(found, around: base, copied: copied)
     }
 
     override func visit(_ node: BooleanLiteralExprSyntax) -> ExprSyntax {
@@ -57,12 +62,27 @@ private final class Rewriter: SyntaxRewriter {
             case let .expression(expression) = base.condition
         else { return base }
 
-        let switched = MutationSwitch.replacing(
-            site,
-            original: expression,
-            with: MutationSwitch.negated(expression)
-        )
+        let switched = OperatorCall.call(OperatorCall.negationHelper, site, [expression])
+            .with(\.leadingTrivia, expression.leadingTrivia)
+            .with(\.trailingTrivia, expression.trailingTrivia)
         return base.with(\.condition, .expression(switched))
+    }
+
+    override func visit(_ node: ReturnStmtSyntax) -> StmtSyntax {
+        let span = SourceSpan(node)
+        let base = super.visit(node)
+
+        guard
+            let site = sites[span]?.first,
+            case let .replaceReturn(text) = site.mutation,
+            let statement = base.as(ReturnStmtSyntax.self),
+            let expression = statement.expression
+        else { return base }
+
+        var parser = Parser(text)
+        let empty = ExprSyntax.parse(from: &parser)
+        let switched = MutationSwitch.replacing(site, original: expression, with: empty)
+        return StmtSyntax(statement.with(\.expression, switched))
     }
 
     override func visit(_ node: CodeBlockItemSyntax) -> CodeBlockItemSyntax {

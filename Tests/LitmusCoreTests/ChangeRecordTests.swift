@@ -45,7 +45,7 @@ struct ChangeRecordTests {
         func f(_ a: Int, _ b: Int) -> Bool {
             return a < b
         }
-        """).first)
+        """).first { $0.operator == "RelationalOperatorReplacement" })
         let change = try #require(mutant.change)
 
         #expect(change.original == "a < b")

@@ -24,7 +24,8 @@ struct SchemataInjectorTests {
         }
         """)
 
-        #expect(result.mutants.count == 1)
+        // The connector, and the value returned.
+        #expect(result.mutants.count == 2)
         #expect(result.mutants[0].description == "changed && to ||")
         #expect(isValidSwift(result.source))
     }
@@ -57,7 +58,7 @@ struct SchemataInjectorTests {
         }
         """)
 
-        #expect(result.mutants.count == 1)
+        #expect(result.mutants.count == 2)
         #expect(result.source.contains("a || b"))
         #expect(isValidSwift(result.source))
     }
@@ -74,8 +75,9 @@ struct SchemataInjectorTests {
         }
         """)
 
-        #expect(result.mutants.count == 3)
-        #expect(Set(result.mutants.map(\.switchName)).count == 3)
+        // Three operators, and the value returned.
+        #expect(result.mutants.count == 4)
+        #expect(Set(result.mutants.map(\.switchName)).count == 4)
         #expect(isValidSwift(result.source))
     }
 
@@ -202,8 +204,8 @@ struct StructuralOperatorTests {
         """, operators: ["SwapTernary"])
 
         #expect(result.mutants.count == 1)
-        #expect(result.source.contains("flag ? 2 : 1"))
-        #expect(result.source.contains("flag ? 1 : 2"))
+        #expect(result.source.contains("__litmus_swap(__litmus_Sample_SwapTernary_"))
+        #expect(result.source.contains(", flag, 1, 2)"))
         #expect(isValidSwift(result.source))
     }
 

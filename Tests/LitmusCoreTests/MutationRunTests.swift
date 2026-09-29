@@ -591,7 +591,7 @@ struct MutationRunTests {
         let summary = try await MutationRun(
             configuration: .init(harness: harness, lanes: ["a"], repair: { _, _ in
                 harness.accept([bad.switchName])
-                return [bad]
+                return .removed([bad])
             })
         )(mutants)
 
@@ -601,14 +601,47 @@ struct MutationRunTests {
         #expect(summary.results.first { $0.verdict == .unviable }?.mutant == bad)
     }
 
+    /// Moving an operator back to a copy takes nothing out, so it must not
+    /// use up the rounds that taking things out has.
+    @Test("keeps building while the repair moves operators back, past the five rounds")
+    func movesDoNotCount() async throws {
+        let mutants = (1...8).map(mutant)
+        let harness = RejectingHarness(rejecting: ["x"])
+        let calls = Counter()
+
+        let summary = try await MutationRun(
+            configuration: .init(harness: harness, lanes: ["a"], repair: { _, _ in
+                if calls.next() < 7 { return .moved }
+                harness.accept(["x"])
+                return .removed([])
+            })
+        )(mutants)
+
+        // Six moves and one round, where five rounds used to be the end.
+        #expect(harness.builds == 8)
+        #expect(summary.results.count == 8)
+    }
+
     @Test("stops when the repair cannot tell which mutant broke the build")
     func unrepairable() async {
         let harness = RejectingHarness(rejecting: ["x"])
 
         await #expect(throws: BuildFailure.self) {
             try await MutationRun(
-                configuration: .init(harness: harness, lanes: ["a"], repair: { _, _ in [] })
+                configuration: .init(harness: harness, lanes: ["a"], repair: { _, _ in .removed([]) })
             )([mutant(1)])
+        }
+    }
+
+    private final class Counter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = 0
+
+        func next() -> Int {
+            lock.lock()
+            defer { lock.unlock() }
+            value += 1
+            return value
         }
     }
 }

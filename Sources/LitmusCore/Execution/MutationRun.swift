@@ -13,15 +13,16 @@ public struct MutationRun: Sendable {
         public let batching: Bool
         /// Takes the mutants a failed build names out of the source and
         /// returns them — none when it fixed something else, such as a test
-        /// target that never built — or nil when it cannot tell what broke.
-        /// Without it, a build that fails ends the run.
-        public let repair: (@Sendable (_ log: String, _ mutants: [Mutant]) throws -> [Mutant]?)?
+        /// target that never built — or says it moved operators back to a
+        /// copy, or nil when it cannot tell what broke. Without it, a build
+        /// that fails ends the run.
+        public let repair: (@Sendable (_ log: String, _ mutants: [Mutant]) throws -> BuildFix?)?
 
         public init(
             harness: any TestHarness,
             lanes: [String],
             batching: Bool = true,
-            repair: (@Sendable (_ log: String, _ mutants: [Mutant]) throws -> [Mutant]?)? = nil
+            repair: (@Sendable (_ log: String, _ mutants: [Mutant]) throws -> BuildFix?)? = nil
         ) {
             self.harness = harness
             self.lanes = lanes
@@ -48,6 +49,16 @@ public struct MutationRun: Sendable {
                 return "the baseline run did not pass"
             }
         }
+    }
+
+    /// What a repair did to a build that failed.
+    public enum BuildFix: Sendable {
+        /// Took these out — none when it fixed something else, such as a
+        /// test target that never built.
+        case removed([Mutant])
+        /// Moved operators from a call back to a copy of their expression;
+        /// nothing was taken out.
+        case moved
     }
 
     public struct Summary: Sendable {
@@ -249,14 +260,29 @@ public struct MutationRun: Sendable {
     /// another attempt would.
     private func build(_ mutants: inout [Mutant]) throws -> (BuiltTests, [Mutant]) {
         var unviable: [Mutant] = []
+        var rounds = 0
+        var moves = 0
 
-        for _ in 0..<5 {
+        while rounds < 5 {
             do {
                 return (try configuration.harness.build(lane: configuration.lanes[0]), unviable)
             } catch let failure as BuildFailure {
                 guard let repair = configuration.repair else { throw failure }
+                guard let fix = try repair(failure.log, mutants) else { throw failure }
 
-                guard let pulled = try repair(failure.log, mutants) else { throw failure }
+                // A move takes nothing out, so it does not count against the
+                // rounds: each sends at least one call back to a copy, and
+                // there are only so many to send.
+                let pulled: [Mutant]
+                switch fix {
+                case .moved:
+                    moves += 1
+                    guard moves <= mutants.count else { throw failure }
+                    continue
+                case let .removed(removed):
+                    rounds += 1
+                    pulled = removed
+                }
                 guard !pulled.isEmpty else { continue }
 
                 let ids = Set(pulled.map(\.switchName))

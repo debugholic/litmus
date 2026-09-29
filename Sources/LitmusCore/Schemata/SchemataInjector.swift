@@ -25,8 +25,14 @@ public struct SchemataInjector: Sendable {
     }
 
     /// `keeping` limits the file to those mutants, by switch name; nil keeps
-    /// every one the operators find.
-    func inject(source: String, path: String, keeping: Set<String>? = nil) -> Result {
+    /// every one the operators find. `copied` switches those by copying their
+    /// expression rather than by a call; see `OperatorCall`.
+    func inject(
+        source: String,
+        path: String,
+        keeping: Set<String>? = nil,
+        copied: Set<String> = []
+    ) -> Result {
         let tree = Parser.parse(source: source)
         let fileName = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
         let converter = SourceLocationConverter(fileName: path, tree: tree)
@@ -58,7 +64,7 @@ public struct SchemataInjector: Sendable {
             return Result(mutants: [], source: source)
         }
 
-        let rewritten = MutationRewrite(sites: sites)(tree).description
+        let rewritten = MutationRewrite(sites: sites, copied: copied)(tree).description
 
         // A site that did not reach the output would be scored as a survivor
         // the tests never had a chance to kill, so check for its flag before
@@ -109,6 +115,7 @@ public struct SchemataInjector: Sendable {
         // Litmus mutation switches. Each reads the active mutant when it is
         // evaluated, so one process can run many mutants in turn.
         \(MutationSwitch.lookup)
+        \(OperatorCall.helpers)
         \(declarations)
 
         """

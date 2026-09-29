@@ -77,7 +77,7 @@ struct EvaluatedOnceTests {
                 return value
             }
         }
-        """) == [false])
+        """) == [false, false])
     }
 
     @Test("not a function declared at file scope")
@@ -87,7 +87,7 @@ struct EvaluatedOnceTests {
             let value = 1 > 2
             return value
         }
-        """) == [false])
+        """) == [false, false])
     }
 
     @Test("survives a plan written and read back")
