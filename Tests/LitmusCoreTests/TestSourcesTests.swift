@@ -94,4 +94,20 @@ struct TestSourcesTests {
         extension Double { var rounded2: Double { (self * 100).rounded() / 100 } }
         """))
     }
+
+    @Test("sees UIKit however it is imported")
+    func uikitImports() {
+        #expect(PlatformHints.importsUIKit("import UIKit\n"))
+        #expect(PlatformHints.importsUIKit("import Foundation\n@preconcurrency import UIKit\n"))
+        #expect(PlatformHints.importsUIKit("import class UIKit.UIView\n"))
+        #expect(!PlatformHints.importsUIKit("import SwiftUI\n// import UIKit later\n"))
+        #expect(!PlatformHints.importsUIKit("import UIKitExtras\n"))
+    }
+
+    @Test("reads a package for iOS alone from its manifest")
+    func iOSOnly() {
+        #expect(PlatformHints.iOSOnly("platforms: [.iOS(.v15)],"))
+        #expect(!PlatformHints.iOSOnly("platforms: [.iOS(.v15), .macOS(.v13)],"))
+        #expect(!PlatformHints.iOSOnly("name: \"Tool\","))
+    }
 }
