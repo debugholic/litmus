@@ -123,4 +123,70 @@ struct NewOperatorTests {
         #expect(result.mutants.count == 4)
         #expect(isValidSwift(result.source))
     }
+
+    // MARK: - return values
+
+    @Test("returns the empty value of the declared type")
+    func returnValues() {
+        let result = inject("""
+        struct S {
+            func enabled(_ a: Int) -> Bool { return a > 0 }
+            func count(_ a: [Int]) -> Int { return a.count }
+            func ratio(_ a: Double) -> Double { return a / 2 }
+            func name(_ a: String) -> String { return a.uppercased() }
+            func items(_ a: [Int]) -> [Int] { return a.filter { $0 > 0 } }
+            func table(_ a: [String: Int]) -> [String: Int] { return a }
+            func first(_ a: [Int]) -> Int? { return a.first }
+            var total: Int { return 3 + 4 }
+            subscript(i: Int) -> String { return String(i) }
+        }
+        """, ["ReplaceReturnValue"])
+
+        #expect(result.mutants.map(\.description) == [
+            "returned false instead", "returned 0 instead", "returned 0 instead", "returned \"\" instead",
+            "returned [] instead", "returned [:] instead", "returned nil instead", "returned 0 instead",
+            "returned \"\" instead",
+        ])
+        #expect(result.source.contains("? (nil) : (a.first))"))
+        #expect(result.source.contains("? ([:]) : (a))"))
+        #expect(isValidSwift(result.source))
+    }
+
+    /// A closure's return type is the compiler's to work out; a guess that
+    /// does not match is a mutant that does not build.
+    @Test("leaves a return alone where the type is unknown or the value is already empty")
+    func returnValuesSkipped() {
+        let result = inject("""
+        struct S {
+            func a(_ list: [Int]) -> [Int] { list.map { x in return x * 2 } }
+            func b() -> Int? { return nil }
+            func c() -> Bool { return false }
+            func d() -> [Int] { return [] }
+            func e() -> Int { return 0 }
+            func f() -> some Collection { return [1] }
+            func g() { return }
+            func h() -> Widget { return Widget() }
+            init?(x: Int) { return nil }
+            var i: Int {
+                get { return 1 }
+                set { return }
+            }
+        }
+        """, ["ReplaceReturnValue"])
+
+        #expect(result.mutants.map(\.description) == ["returned 0 instead"])
+        #expect(isValidSwift(result.source))
+    }
+
+    @Test("keeps try and await inside the switched value")
+    func returnValuesEffects() {
+        let result = inject("""
+        func load() async throws -> String {
+            return try await fetch()
+        }
+        """, ["ReplaceReturnValue"])
+
+        #expect(result.source.contains("? (\"\") : (try await fetch()))"))
+        #expect(isValidSwift(result.source))
+    }
 }

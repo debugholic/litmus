@@ -110,6 +110,29 @@ final class SiteCollector: SyntaxVisitor {
         return .visitChildren
     }
 
+    // MARK: - replaced return values
+
+    override func visit(_ node: ReturnStmtSyntax) -> SyntaxVisitorContinueKind {
+        guard
+            `operator` == .replaceReturnValue,
+            let expression = node.expression,
+            let type = node.declaredReturnType,
+            let empty = type.emptyValue(replacing: expression)
+        else { return .visitChildren }
+
+        record(
+            node,
+            at: expression.startLocation(converter: converter),
+            on: SourceSpan(node),
+            description: "returned \(empty) instead",
+            mutation: .replaceReturn(empty),
+            region: expression,
+            replacement: empty
+        )
+
+        return .visitChildren
+    }
+
     // MARK: - removed side effects
 
     override func visit(_ node: CodeBlockItemSyntax) -> SyntaxVisitorContinueKind {
@@ -258,6 +281,81 @@ private extension SyntaxProtocol {
 
         guard let member else { return types.isEmpty ? nil : types.joined(separator: ".") }
         return (types + [member]).joined(separator: ".")
+    }
+}
+
+private extension ReturnStmtSyntax {
+    /// The type the enclosing function, subscript or getter declares.
+    ///
+    /// Nil inside a closure, whose type Litmus cannot see without the
+    /// compiler, and anywhere else nothing is declared: an empty value that
+    /// does not match the type is a mutant that does not build.
+    var declaredReturnType: TypeSyntax? {
+        var current = parent
+        while let node = current {
+            if node.is(ClosureExprSyntax.self)
+                || node.is(InitializerDeclSyntax.self)
+                || node.is(DeinitializerDeclSyntax.self) {
+                return nil
+            }
+            if let function = node.as(FunctionDeclSyntax.self) {
+                return function.signature.returnClause?.type
+            }
+            if let subscriptDecl = node.as(SubscriptDeclSyntax.self) {
+                return subscriptDecl.returnClause.type
+            }
+            if let accessor = node.as(AccessorDeclSyntax.self),
+               accessor.accessorSpecifier.tokenKind != .keyword(.get) {
+                return nil
+            }
+            if let binding = node.as(PatternBindingSyntax.self) {
+                return binding.typeAnnotation?.type
+            }
+            current = node.parent
+        }
+        return nil
+    }
+}
+
+private extension TypeSyntax {
+    /// The value a test would have to notice: nothing, false, zero or empty.
+    /// Nil for a type with no such value Litmus can name without the compiler,
+    /// or when the code already returns it.
+    func emptyValue(replacing expression: ExprSyntax) -> String? {
+        let empty: String?
+        if self.is(OptionalTypeSyntax.self) || self.is(ImplicitlyUnwrappedOptionalTypeSyntax.self) {
+            empty = "nil"
+        } else if self.is(ArrayTypeSyntax.self) {
+            empty = "[]"
+        } else if self.is(DictionaryTypeSyntax.self) {
+            empty = "[:]"
+        } else if let name = self.as(IdentifierTypeSyntax.self)?.name.text {
+            switch name {
+            case "Bool": empty = "false"
+            case "String": empty = "\"\""
+            case "Optional": empty = "nil"
+            case "Array", "Set": empty = "[]"
+            case "Dictionary": empty = "[:]"
+            case "Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16", "UInt32", "UInt64",
+                 "Double", "Float", "CGFloat", "TimeInterval", "Decimal":
+                empty = "0"
+            default: empty = nil
+            }
+        } else {
+            empty = nil
+        }
+
+        // Already the empty value, or a literal another operator changes.
+        guard let empty, !expression.isLiteral(empty) else { return nil }
+        if empty == "false", expression.is(BooleanLiteralExprSyntax.self) { return nil }
+        return empty
+    }
+}
+
+private extension ExprSyntax {
+    func isLiteral(_ text: String) -> Bool {
+        let written = trimmedDescription.filter { !$0.isWhitespace }
+        return written == text || (text == "0" && (written == "0.0" || written == "0"))
     }
 }
 

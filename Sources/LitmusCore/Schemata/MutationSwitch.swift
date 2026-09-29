@@ -244,7 +244,7 @@ extension MutationSite.Mutation {
                 .with(\.leadingTrivia, elseExpression.leadingTrivia)
                 .with(\.trailingTrivia, elseExpression.trailingTrivia)
 
-        case .removeStatement, .flipBoolean, .negateCondition:
+        case .removeStatement, .flipBoolean, .negateCondition, .replaceReturn:
             return nil
         }
 

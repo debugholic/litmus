@@ -29,6 +29,8 @@ extension MutationSite {
         case flipBoolean
         /// A condition's expression to its negation.
         case negateCondition
+        /// A returned value to the empty value of its type, written out.
+        case replaceReturn(String)
     }
 }
 

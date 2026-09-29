@@ -76,6 +76,7 @@ struct MutationOperatorTests {
             "ChangeArithmeticOperator",
             "FlipBooleanLiteral",
             "NegateCondition",
+            "ReplaceReturnValue",
         ])
     }
 }

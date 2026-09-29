@@ -248,6 +248,7 @@ struct ProjectInjectionTests {
         let second = try inject(files).result.mutants.map(\.fileName)
 
         #expect(first == second)
-        #expect(first == ["A.swift", "B.swift", "C.swift"])
+        // Two each: the connector, and the value returned.
+        #expect(first == ["A.swift", "A.swift", "B.swift", "B.swift", "C.swift", "C.swift"])
     }
 }

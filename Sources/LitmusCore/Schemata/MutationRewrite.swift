@@ -1,3 +1,4 @@
+import SwiftParser
 import SwiftSyntax
 
 /// Applies every mutation in one pass, leaving each one switched off.
@@ -63,6 +64,23 @@ private final class Rewriter: SyntaxRewriter {
             with: MutationSwitch.negated(expression)
         )
         return base.with(\.condition, .expression(switched))
+    }
+
+    override func visit(_ node: ReturnStmtSyntax) -> StmtSyntax {
+        let span = SourceSpan(node)
+        let base = super.visit(node)
+
+        guard
+            let site = sites[span]?.first,
+            case let .replaceReturn(text) = site.mutation,
+            let statement = base.as(ReturnStmtSyntax.self),
+            let expression = statement.expression
+        else { return base }
+
+        var parser = Parser(text)
+        let empty = ExprSyntax.parse(from: &parser)
+        let switched = MutationSwitch.replacing(site, original: expression, with: empty)
+        return StmtSyntax(statement.with(\.expression, switched))
     }
 
     override func visit(_ node: CodeBlockItemSyntax) -> CodeBlockItemSyntax {
