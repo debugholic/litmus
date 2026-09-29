@@ -91,6 +91,22 @@ public struct MutationRun: Sendable {
             return Double(caught) / Double(scored) * 100
         }
 
+        /// Every test that reached a mutant, costliest first.
+        public var tests: [TestScore] {
+            var byID: [String: (test: TestRef, reached: Int, killed: Int)] = [:]
+            for result in results {
+                for test in result.coveredBy {
+                    byID[test.id, default: (test, 0, 0)].reached += 1
+                }
+                for test in result.killedBy {
+                    byID[test.id, default: (test, 0, 0)].killed += 1
+                }
+            }
+            return byID.values
+                .map { TestScore(test: $0.test, reached: $0.reached, killed: $0.killed) }
+                .sorted { ($0.cost ?? -1, $0.test.id) > ($1.cost ?? -1, $1.test.id) }
+        }
+
         /// The directory every path sits under, with its trailing slash.
         static func commonDirectory(of paths: [String]) -> String {
             guard let first = paths.first else { return "" }
@@ -104,6 +120,18 @@ public struct MutationRun: Sendable {
 
             return parts.isEmpty ? "" : parts.joined(separator: "/") + "/"
         }
+    }
+
+    /// A test, with what it did across the run.
+    public struct TestScore: Sendable {
+        public let test: TestRef
+        /// Mutants it ran against: each one a run of this test.
+        public let reached: Int
+        public let killed: Int
+
+        /// What the test costs the run: its time once for every mutant it
+        /// reaches.
+        public var cost: TimeInterval? { test.duration.map { $0 * Double(reached) } }
     }
 
     public struct FileScore: Sendable {
@@ -410,9 +438,10 @@ public struct MutationRun: Sendable {
                     var reached: Set<String> = []
                     var probed = false
                     var names: [String: String] = [:]
+                    var times: [String: TimeInterval] = [:]
                     var tests: [String: (covered: [TestRef], killed: [TestRef])] = [:]
                     func refs(_ ids: [String]) -> [TestRef] {
-                        ids.map { TestRef(id: $0, name: names[$0] ?? $0) }
+                        ids.map { TestRef(id: $0, name: names[$0] ?? $0, duration: times[$0]) }
                     }
                     let verdicts = try harness.runBatch(
                         plan, target: target, lane: lane, ids: ids, timeouts: Batch.Timeouts()
@@ -429,6 +458,8 @@ public struct MutationRun: Sendable {
                             reached.insert(id)
                         case let .test(id, name):
                             names[id] = name
+                        case let .timed(id, seconds):
+                            times[id] = seconds
                         case let .covered(id, ids):
                             tests[id, default: ([], [])].covered = refs(ids)
                         case let .killedBy(id, ids):

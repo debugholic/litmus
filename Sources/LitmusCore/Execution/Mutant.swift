@@ -120,6 +120,8 @@ public struct MutantResult: Sendable {
 public struct TestRef: Sendable, Hashable {
     public let id: String
     public let name: String
+    /// How long it took on its own, when the probe timed it.
+    public var duration: TimeInterval?
 
     /// `Module.Suite/function()/File.swift:12:5` gives `File.swift`.
     public var file: String? {

@@ -116,4 +116,24 @@ struct GapTests {
 
         #expect(rendered.contains("passed by: 하나, 둘, 셋 and 1 more"))
     }
+
+    @Test("plain report lists the tests that cost the run most, by time times mutants reached")
+    func plainSlowest() {
+        let quick = TestRef(id: "App.T/quick()/ATests.swift:1:1", name: "빠른 테스트", duration: 0.2)
+        let slow = TestRef(id: "App.T/slow()/ATests.swift:9:1", name: "느린 테스트", duration: 3)
+        var first = result(10, .killed, in: "f()")
+        first.coveredBy = [quick, slow]
+        first.killedBy = [quick]
+        var second = result(11, .survived, in: "f()")
+        second.coveredBy = [slow]
+
+        let summary = MutationRun.Summary(results: [first, second], duration: 1)
+        let rendered = try! Report(summary).rendered(as: .plain)
+
+        #expect(summary.tests.map(\.test.name) == ["느린 테스트", "빠른 테스트"])
+        #expect(summary.tests.first?.reached == 2)
+        #expect(summary.tests.last?.killed == 1)
+        #expect(rendered.contains("slowest tests — each runs once for every mutant it reaches:"))
+        #expect(rendered.contains("   6.0s  3.0s × 2  느린 테스트"))
+    }
 }

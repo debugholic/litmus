@@ -29,6 +29,8 @@ public enum Batch {
         case covered(String, tests: [String])
         /// The tests that failed with the mutant on.
         case killedBy(String, tests: [String])
+        /// How long a test took on its own, while probing.
+        case timed(String, seconds: TimeInterval)
     }
 
     /// How long to wait before deciding a launch or a mutant is stuck.
@@ -50,6 +52,20 @@ public enum Batch {
         /// makes a test slower should not be.
         mutating func learn(baseline duration: TimeInterval) {
             mutant = max(floor, duration * 10)
+        }
+
+        /// How long each test took alone, from the probe.
+        var tests: [String: TimeInterval] = [:]
+
+        /// Ten times what the tests a mutant runs took alone, and never less
+        /// than the floor. The baseline is a poor measure here: it carries the
+        /// process's first run, and moved between 2s and 25s from one run to
+        /// the next, taking a hung mutant's allowance from one minute to four.
+        /// Without a time for every one of the tests, the baseline's measure.
+        func mutant(running ids: [String]) -> TimeInterval {
+            let times = ids.compactMap { tests[$0] }
+            guard !ids.isEmpty, times.count == ids.count else { return mutant }
+            return max(floor, times.reduce(0, +) * 10)
         }
     }
 
@@ -146,6 +162,9 @@ public enum Batch {
                         for (test, name) in found.names.sorted(by: { $0.key < $1.key }) {
                             record("TEST\\t\\(Self.field(test))\\t\\(Self.field(name))")
                         }
+                        for (test, seconds) in found.durations.sorted(by: { $0.key < $1.key }) {
+                            record("TIME\\t\\(Self.field(test))\\t\\(seconds)")
+                        }
                         for id in Self.reached(in: probeDirectory) {
                             record("REACHED \\(id)")
                         }
@@ -207,7 +226,7 @@ public enum Batch {
         private static func probe(
             in directory: String,
             run: ([String]?) async -> CInt
-        ) async -> (reaching: [String: [String]], names: [String: String]) {
+        ) async -> (reaching: [String: [String]], names: [String: String], durations: [String: TimeInterval]) {
             let listing = directory + "/tests.jsonl"
             var arguments = __CommandLineArguments_v0()
             arguments.listTests = true
@@ -231,10 +250,13 @@ public enum Batch {
             }
 
             var reaching: [String: [String]] = [:]
+            var durations: [String: TimeInterval] = [:]
             for (index, test) in tests.enumerated() {
                 let file = directory + "/\\(index).probe"
                 setenv("\(MutationSwitch.probeVariable)", file, 1)
+                let started = Date()
                 _ = await run([NSRegularExpression.escapedPattern(for: test)])
+                durations[test] = Date().timeIntervalSince(started)
                 unsetenv("\(MutationSwitch.probeVariable)")
 
                 for id in ((try? String(contentsOfFile: file, encoding: .utf8)) ?? "").split(separator: "\\n") {
@@ -244,7 +266,7 @@ public enum Batch {
 
             let map = reaching.map { ([$0.key] + $0.value).joined(separator: "\\t") }.joined(separator: "\\n")
             try? map.write(toFile: directory + "/map.tsv", atomically: true, encoding: .utf8)
-            return (reaching, names)
+            return (reaching, names, durations)
         }
 
         /// The tests that recorded an issue in a run's event stream: the ones
@@ -361,6 +383,8 @@ extension Batch {
                 return .covered(fields[1], tests: Array(fields.dropFirst(2)))
             case "KILLEDBY" where fields.count >= 2:
                 return .killedBy(fields[1], tests: Array(fields.dropFirst(2)))
+            case "TIME" where fields.count == 3:
+                return TimeInterval(fields[2]).map { .timed(fields[1], seconds: $0) }
             default:
                 break
             }

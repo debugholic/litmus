@@ -67,6 +67,8 @@ public struct Report: Sendable {
             }
         }
 
+        lines += slowest()
+
         let gaps = FunctionGap.find(in: summary.results)
         guard !gaps.isEmpty else { return lines.joined(separator: "\n") }
 
@@ -96,6 +98,27 @@ public struct Report: Sendable {
         }
 
         return lines.joined(separator: "\n")
+    }
+
+    /// The five tests that cost the run most, when the probe timed them.
+    /// A slow test is paid for once per mutant it reaches, so its time
+    /// alone does not say how much it slows a run down.
+    private func slowest() -> [String] {
+        let timed = summary.tests.filter { $0.cost != nil }.prefix(5)
+        guard !timed.isEmpty else { return [] }
+
+        var lines = ["", "slowest tests — each runs once for every mutant it reaches:"]
+        for score in timed {
+            let cost = seconds(score.cost ?? 0)
+            let each = seconds(score.test.duration ?? 0)
+            lines.append("  \(String(repeating: " ", count: max(0, 7 - cost.count)))\(cost)"
+                + "  \(each) × \(score.reached)  \(score.test.name)")
+        }
+        return lines
+    }
+
+    private func seconds(_ value: TimeInterval) -> String {
+        value < 10 ? String(format: "%.1fs", value) : "\(Int(value.rounded()))s"
     }
 
     /// The tests that ran through a survivor and passed anyway: the ones
@@ -143,6 +166,15 @@ public struct Report: Sendable {
                     "timeout": file.count(.timedOut),
                     "unviable": file.count(.unviable),
                     "error": file.count(.error),
+                ] as [String: Any]
+            },
+            "tests": summary.tests.map { score in
+                [
+                    "name": score.test.name,
+                    "file": score.test.file as Any,
+                    "duration": score.test.duration as Any,
+                    "reached": score.reached,
+                    "killed": score.killed,
                 ] as [String: Any]
             },
             "mutants": summary.results.sorted(by: sortedByLocation).map { result in
