@@ -24,12 +24,32 @@ public struct ChangedLines: Sendable {
         lines[path]?.contains(line) ?? false
     }
 
-    /// Re-keys the diff, whose paths are relative to the repository, onto the
+    /// The same lines, keyed from inside `prefix`: a project's paths rather
+    /// than its repository's. Files outside it are left out.
+    func relative(to prefix: String) -> ChangedLines {
+        guard !prefix.isEmpty else { return self }
+        var relative: [String: Set<Int>] = [:]
+        for (path, touched) in lines where path.hasPrefix(prefix) {
+            relative[String(path.dropFirst(prefix.count))] = touched
+        }
+        return ChangedLines(lines: relative)
+    }
+
+    /// Re-keys the diff, whose paths are relative to the project, onto the
     /// absolute paths of the working copy.
-    public func rebased(onto paths: [String]) -> ChangedLines {
+    ///
+    /// By the path under `root` when one is given and the diff has it: exact.
+    /// Otherwise by the longest shared ending, which needs two components
+    /// to agree and so never matched a file at the project's root.
+    public func rebased(onto paths: [String], root: URL? = nil) -> ChangedLines {
         var rebased: [String: Set<Int>] = [:]
+        let base = root.map { $0.path.hasSuffix("/") ? $0.path : $0.path + "/" }
 
         for path in paths {
+            if let base, path.hasPrefix(base), let exact = lines[String(path.dropFirst(base.count))] {
+                rebased[path] = exact
+                continue
+            }
             guard let source = PathMatch.best(for: path, among: lines.keys) else { continue }
             rebased[path] = lines[source]
         }

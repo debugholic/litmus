@@ -32,7 +32,25 @@ public enum GitDiff {
             throw Failure(description: "git diff against '\(ref)' failed")
         }
 
-        return parse(String(data: data, encoding: .utf8) ?? "")
+        return parse(String(data: data, encoding: .utf8) ?? "").relative(to: prefix(of: project))
+    }
+
+    /// Where the project sits in its repository, `Packages/Player/` or empty
+    /// at the root. The diff names paths from the repository's root; the
+    /// copy is of the project.
+    static func prefix(of project: URL) -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = ["-c", "core.quotePath=false", "rev-parse", "--show-prefix"]
+        process.currentDirectoryURL = project
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+
+        guard (try? process.run()) != nil else { return "" }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// `+++ b/<path>` names a file; `@@ -a,b +c,d @@` gives the lines it now

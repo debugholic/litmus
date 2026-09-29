@@ -138,4 +138,27 @@ struct ChangedLinesTests {
 
         #expect(changed.includes(path: "재생 설정.swift", line: 2))
     }
+
+    /// Matching by shared ending needs two components to agree, and a file
+    /// at the project's root has one.
+    @Test("matches a file at the project's root by its path under the copy")
+    func rootFile() {
+        let changed = ChangedLines(lines: ["Main.swift": [3], "Sources/App/Main.swift": [9]])
+        let copy = URL(fileURLWithPath: "/tmp/copy")
+
+        let rebased = changed.rebased(onto: ["/tmp/copy/Main.swift", "/tmp/copy/Sources/App/Main.swift"], root: copy)
+
+        #expect(rebased.includes(path: "/tmp/copy/Main.swift", line: 3))
+        #expect(rebased.includes(path: "/tmp/copy/Sources/App/Main.swift", line: 9))
+        #expect(!rebased.includes(path: "/tmp/copy/Main.swift", line: 9))
+    }
+
+    @Test("keys a project in a folder of its repository from its own root")
+    func projectInFolder() {
+        let changed = ChangedLines(lines: ["Packages/Player/Sources/A.swift": [1], "App/B.swift": [2]])
+            .relative(to: "Packages/Player/")
+
+        #expect(changed.includes(path: "Sources/A.swift", line: 1))
+        #expect(changed.fileCount == 1)
+    }
 }
