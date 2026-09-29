@@ -21,8 +21,16 @@ import SwiftSyntax
 ///
 /// Adapted from Muter (MIT) — see NOTICE.
 enum MutationSwitch {
-    /// `(flag ? (mutated) : (original))`
-    static func expression(_ sites: [MutationSite], around base: ExprSyntax) -> ExprSyntax {
+    /// Each operator switched where it stands, by `OperatorCall`; what that
+    /// cannot take, `(flag ? (mutated) : (original))` around the rest.
+    ///
+    /// `copied` names sites the build sent back from a call: their operands
+    /// were not a type the helpers take, and they go back to a copy.
+    static func expression(
+        _ sites: [MutationSite],
+        around base: ExprSyntax,
+        copied: Set<String> = []
+    ) -> ExprSyntax {
         guard let sequence = base.as(SequenceExprSyntax.self) else { return base }
 
         // Trivia belongs to the wrapper, not to the copies inside it.
@@ -30,8 +38,16 @@ enum MutationSwitch {
 
         // Built from the inside out, so the original ends up as the last else.
         var result = parenthesized(ExprSyntax(bare))
+        var left = sites
 
-        for site in sites.reversed() {
+        if let calls = OperatorCall.rewrite(bare, sites: sites, copied: copied) {
+            result = parenthesized(calls.expression)
+            left = calls.left
+        }
+
+        // A copy of the sequence as written, not of the calls: only one
+        // mutant is ever on, and with it on the calls all pick the original.
+        for site in left.reversed() {
             guard let mutated = site.mutation.apply(to: bare) else { continue }
 
             result = parenthesized(
@@ -178,7 +194,7 @@ enum MutationSwitch {
         return "__litmus_" + String(sanitized)
     }
 
-    private static func flag(_ id: String) -> ExprSyntax {
+    static func flag(_ id: String) -> ExprSyntax {
         ExprSyntax(DeclReferenceExprSyntax(baseName: .identifier(flagName(id))))
     }
 

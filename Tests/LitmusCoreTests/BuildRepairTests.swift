@@ -46,33 +46,68 @@ struct BuildRepairTests {
             return (lines.firstIndex { $0.contains(flag) && !$0.contains("private var") } ?? 0) + 1
         }
 
-        func repair(_ log: String) throws -> [Mutant] {
-            try BuildRepair(project: project, workingCopy: copy)(log: log, mutants: mutants)
+        /// One repair for the life of the copy, as a run has.
+        lazy var repairer = BuildRepair(project: project, workingCopy: copy)
+
+        func repair(_ log: String) throws -> BuildRepair.Outcome {
+            try repairer(log: log, mutants: mutants)
         }
     }
 
-    @Test("takes out the mutant on the line the compiler named, and keeps the rest")
+    /// A call takes numbers, `Comparable` and `Equatable`; a copy of the
+    /// expression takes whatever the original did. Only a copy that fails
+    /// too means the mutant itself does not build.
+    @Test("moves an operator the compiler rejected back to a copy, and takes it out if that fails too")
     func namedLine() throws {
         let injected = try Injected(Self.source)
         let rejected = try #require(injected.mutants.first { $0.description.contains("<") })
-        let line = injected.lineNumber(containing: rejected)
+        let flag = MutationSwitch.flagName(rejected.switchName)
 
-        let pulled = try injected.repair("\(injected.file):\(line):20: error: binary operator '>=' cannot be applied")
+        let first = try injected.repair(
+            "\(injected.file):\(injected.lineNumber(containing: rejected)):20: error: cannot convert value"
+        )
 
-        #expect(pulled == [rejected])
-        #expect(!injected.text.contains(MutationSwitch.flagName(rejected.switchName)))
-        for kept in injected.mutants where kept != rejected {
+        #expect(first.removed.isEmpty)
+        #expect(first.moved == 1)
+        #expect(injected.text.contains("(\(flag) ? (a >= b) : (a < b))"))
+        for kept in injected.mutants {
             #expect(injected.text.contains(MutationSwitch.flagName(kept.switchName)))
         }
+
+        let second = try injected.repair(
+            "\(injected.file):\(injected.lineNumber(containing: rejected)):20: error: binary operator '>=' cannot be applied"
+        )
+
+        #expect(second.removed == [rejected])
+        #expect(second.moved == 0)
+        #expect(!injected.text.contains(flag))
+    }
+
+    @Test("finds the call an error points into when the flag is on another line")
+    func multilineCall() throws {
+        let file = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("litmus-call-\(UUID().uuidString).swift")
+        defer { try? FileManager.default.removeItem(at: file) }
+        try """
+        let x = __litmus_add(__litmus_outer, a, __litmus_mul(__litmus_inner, b,
+            c.value))
+        let y = 1
+        """.write(to: file, atomically: true, encoding: .utf8)
+
+        #expect(BuildRepair.enclosingCallFlag(at: (file.path, 2, 7), in: file.path) == "__litmus_inner")
+        #expect(BuildRepair.enclosingCallFlag(at: (file.path, 3, 9), in: file.path) == nil)
     }
 
     @Test("takes out the whole file when the line has no switch on it")
     func unnamedLine() throws {
         let injected = try Injected(Self.source)
 
-        let pulled = try injected.repair("\(injected.file):1:1: error: something further down broke")
+        let first = try injected.repair("\(injected.file):1:1: error: something further down broke")
+        let second = try injected.repair("\(injected.file):1:1: error: something further down broke")
 
-        #expect(Set(pulled.map(\.switchName)) == Set(injected.mutants.map(\.switchName)))
+        // Operators go back to copies first; what is left goes the second time.
+        #expect(first.moved == 3)
+        #expect(Set((first.removed + second.removed).map(\.switchName)) == Set(injected.mutants.map(\.switchName)))
         #expect(injected.text == Self.source)
     }
 
@@ -81,9 +116,9 @@ struct BuildRepairTests {
         let injected = try Injected(Self.source)
         let before = injected.text
 
-        let pulled = try injected.repair("/elsewhere/Other.swift:3:1: error: no such module 'Lottie'")
+        let outcome = try injected.repair("/elsewhere/Other.swift:3:1: error: no such module 'Lottie'")
 
-        #expect(pulled.isEmpty)
+        #expect(outcome.changedNothing)
         #expect(injected.text == before)
     }
 

@@ -27,7 +27,10 @@ struct NewOperatorTests {
         #expect(Set(result.mutants.map(\.description)) == [
             "changed + to -", "changed * to /", "changed % to *", "changed - to +", "changed / to *",
         ])
-        #expect(result.source.contains("a - b * 2 % 3"))
+        // Each operator a call, in the order the operators bind.
+        #expect(result.source.contains("__litmus_add(__litmus_Sample_ChangeArithmeticOperator_2_15_"))
+        #expect(result.source.contains("__litmus_rem(__litmus_Sample_ChangeArithmeticOperator_2_23_"))
+        #expect(result.source.contains("__litmus_mul(__litmus_Sample_ChangeArithmeticOperator_2_19_"))
         #expect(isValidSwift(result.source))
     }
 
@@ -94,7 +97,9 @@ struct NewOperatorTests {
 
         #expect(result.mutants.count == 3)
         #expect(result.mutants.allSatisfy { $0.description == "negated the condition" })
-        #expect(result.source.contains("? (!(items.contains(3))) : (items.contains(3))"))
+        // Written once, not once as it is and once behind `!`.
+        #expect(result.source.contains("if __litmus_not(__litmus_Sample_NegateCondition_"))
+        #expect(result.source.components(separatedBy: "items.contains(3)").count == 2)
         #expect(isValidSwift(result.source))
     }
 

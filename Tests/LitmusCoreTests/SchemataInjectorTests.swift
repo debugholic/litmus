@@ -204,8 +204,8 @@ struct StructuralOperatorTests {
         """, operators: ["SwapTernary"])
 
         #expect(result.mutants.count == 1)
-        #expect(result.source.contains("flag ? 2 : 1"))
-        #expect(result.source.contains("flag ? 1 : 2"))
+        #expect(result.source.contains("__litmus_swap(__litmus_Sample_SwapTernary_"))
+        #expect(result.source.contains(", flag, 1, 2)"))
         #expect(isValidSwift(result.source))
     }
 

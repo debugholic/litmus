@@ -184,8 +184,8 @@ struct Run: AsyncParsableCommand {
         in working: URL
     ) -> @Sendable (String, [Mutant]) throws -> [Mutant]? {
         { log, mutants in
-            let pulled = try repair(log: log, mutants: mutants)
-            if !pulled.isEmpty { return pulled }
+            let outcome = try repair(log: log, mutants: mutants)
+            if !outcome.changedNothing { return outcome.removed }
 
             guard allTests else { return nil }
             let dropped = try AllTestsScheme.leaveOut(failedIn: log, in: working)
