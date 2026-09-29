@@ -104,4 +104,48 @@ struct GapTests {
         #expect(rendered.contains("UNTESTED GameResult.handleRowTap(for:)  0 of 1 caught"))
         #expect(rendered.contains("A.swift:163  comparison   `a == b` → `a != b`"))
     }
+
+    @Test("plain report names the tests that passed a survivor")
+    func plainPassedBy() {
+        var survivor = result(163, .survived, in: "GameResult.handleRowTap(for:)")
+        survivor.coveredBy = ["하나", "둘", "셋", "넷"].enumerated().map {
+            TestRef(id: "App.T/t\($0.offset)()/ATests.swift:1:1", name: $0.element)
+        }
+
+        let rendered = try! Report(MutationRun.Summary(results: [survivor], duration: 1)).rendered(as: .plain)
+
+        #expect(rendered.contains("passed by: 하나, 둘, 셋 and 1 more"))
+    }
+
+    @Test("plain report lists the tests that cost the run most, by time times mutants reached")
+    func plainSlowest() {
+        let quick = TestRef(id: "App.T/quick()/ATests.swift:1:1", name: "빠른 테스트", duration: 0.2)
+        let slow = TestRef(id: "App.T/slow()/ATests.swift:9:1", name: "느린 테스트", duration: 3)
+        var first = result(10, .killed, in: "f()")
+        first.coveredBy = [quick, slow]
+        first.killedBy = [quick]
+        var second = result(11, .survived, in: "f()")
+        second.coveredBy = [slow]
+
+        let summary = MutationRun.Summary(results: [first, second], duration: 1)
+        let rendered = try! Report(summary).rendered(as: .plain)
+
+        #expect(summary.tests.map(\.test.name) == ["느린 테스트", "빠른 테스트"])
+        #expect(summary.tests.first?.reached == 2)
+        #expect(summary.tests.last?.killed == 1)
+        #expect(rendered.contains("slowest tests — each runs once for every mutant it reaches:"))
+        #expect(rendered.contains("   6.0s  3.0s × 2  느린 테스트"))
+    }
+
+    @Test("plain report adds the mutation score when some mutants no test reaches")
+    func plainMutationScore() {
+        let reached = Report(MutationRun.Summary(results: [result(1, .killed, in: "f()")], duration: 1))
+        let partly = Report(MutationRun.Summary(results: [
+            result(1, .killed, in: "f()"), result(2, .noCoverage, in: "g()"),
+            result(3, .noCoverage, in: "g()"), result(4, .noCoverage, in: "g()"),
+        ], duration: 1))
+
+        #expect(!(try! reached.rendered(as: .plain)).contains("mutation score"))
+        #expect((try! partly.rendered(as: .plain)).contains("mutation score 25% — caught of every mutant, reached or not"))
+    }
 }

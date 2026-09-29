@@ -271,6 +271,8 @@ struct MutationRunTests {
         let redBaselines: Set<String>
         /// Switches a finished probe reports reached, or nil for no probe.
         let reached: Set<String>?
+        /// Tests reaching each switch, reported by a probe, by test id.
+        let covering: [String: [String]]
 
         private let lock = NSLock()
         private(set) var batched: [String: [String]] = [:]
@@ -281,12 +283,14 @@ struct MutationRunTests {
             targets: [TestedScope.TestTarget],
             kills: [String: Set<String>] = [:],
             redBaselines: Set<String> = [],
-            reached: Set<String>? = nil
+            reached: Set<String>? = nil,
+            covering: [String: [String]] = [:]
         ) {
             self.targets = targets
             self.kills = kills
             self.redBaselines = redBaselines
             self.reached = reached
+            self.covering = covering
         }
 
         func build(lane: String) throws -> BuiltTests { BuiltTests() }
@@ -333,6 +337,16 @@ struct MutationRunTests {
             lock.lock()
             defer { lock.unlock() }
             batched[target, default: []].append(contentsOf: ids)
+
+            for test in Set(covering.values.joined()) {
+                onEvent(.test(id: test, name: "name of \(test)"))
+            }
+            for id in ids {
+                guard let tests = covering[id] else { continue }
+                onEvent(.covered(id, tests: tests))
+                if kills[target]?.contains(id) == true { onEvent(.killedBy(id, tests: [tests[0]])) }
+                onEvent(.finished(id, kills[target]?.contains(id) == true ? .killed : .survived, 0.1))
+            }
 
             if let reached, ids.contains(Batch.baseline) {
                 onEvent(.started(Batch.probe))
@@ -403,6 +417,26 @@ struct MutationRunTests {
         #expect(harness.separate["ATests"] == [read.switchName])
         #expect(summary.results.first { $0.mutant == unread }?.verdict == .noCoverage)
         #expect(summary.results.count == 2)
+    }
+
+    @Test("keeps the tests that reached a mutant and the ones that caught it, by name")
+    func testsPerMutant() async throws {
+        let source = try TestSource()
+        let caught = mutant(1, in: "/project/A.swift")
+        let missed = mutant(2, in: "/project/A.swift")
+        let harness = TargetStub(
+            targets: [.init(name: "ATests", files: [source.url.path], aimedAt: ["/project/A.swift"])],
+            kills: ["ATests": [caught.switchName]],
+            covering: [caught.switchName: ["t1", "t2"], missed.switchName: ["t2"]]
+        )
+
+        let summary = try await MutationRun(configuration: .init(harness: harness, lanes: ["a"]))([caught, missed])
+        let byMutant = Dictionary(uniqueKeysWithValues: summary.results.map { ($0.mutant.switchName, $0) })
+
+        #expect(byMutant[caught.switchName]?.coveredBy.map(\.name) == ["name of t1", "name of t2"])
+        #expect(byMutant[caught.switchName]?.killedBy.map(\.id) == ["t1"])
+        #expect(byMutant[missed.switchName]?.coveredBy.map(\.id) == ["t2"])
+        #expect(byMutant[missed.switchName]?.killedBy.isEmpty == true)
     }
 
     @Test("runs each mutant in the target aimed at its file")

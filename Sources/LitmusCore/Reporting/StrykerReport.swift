@@ -89,12 +89,26 @@ public struct StrykerReport: Sendable {
             ] as [String: Any]
         }
 
-        return [
+        var report: [String: Any] = [
             "schemaVersion": "2",
             "thresholds": ["high": 80, "low": 60],
             "framework": ["name": "Litmus"],
             "files": files,
         ]
+        let tests = testFiles()
+        if !tests.isEmpty { report["testFiles"] = tests }
+        return report
+    }
+
+    /// Every test that reached a mutant, grouped by the file it is in, so
+    /// the viewer can list them and say which mutants each one caught.
+    private func testFiles() -> [String: Any] {
+        let tests = Set(summary.results.flatMap { $0.coveredBy + $0.killedBy })
+        return Dictionary(grouping: tests) { $0.file ?? "tests" }.mapValues { tests in
+            [
+                "tests": tests.sorted { $0.id < $1.id }.map { ["id": $0.id, "name": $0.name] },
+            ] as [String: Any]
+        }
     }
 
     private func mutant(_ result: MutantResult, lines: [String], gap: FunctionGap?) -> [String: Any] {
@@ -115,6 +129,8 @@ public struct StrykerReport: Sendable {
         ]
 
         if let replacement = change?.replacement { entry["replacement"] = replacement }
+        if !result.coveredBy.isEmpty { entry["coveredBy"] = result.coveredBy.map(\.id) }
+        if !result.killedBy.isEmpty { entry["killedBy"] = result.killedBy.map(\.id) }
 
         var description = "[\(result.gapKind.rawValue)] \(mutant.description)"
         if let gap {

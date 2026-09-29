@@ -151,6 +151,7 @@ extension Xcodebuild: BatchingHarness {
         var report = Batch.Report(url: resultsFile)
         var verdicts: [String: Verdict] = [:]
         var current: (id: String, started: Date)?
+        var limits: [String: TimeInterval] = [:]
         var reported = false
         var stopped = false
         let launched = Date()
@@ -169,7 +170,11 @@ extension Xcodebuild: BatchingHarness {
                     if id == Batch.baseline, verdict == .survived {
                         timeouts.learn(baseline: duration)
                     }
-                case .reached:
+                case let .timed(test, seconds):
+                    timeouts.tests[test] = seconds
+                case let .covered(id, tests):
+                    limits[id] = timeouts.mutant(running: tests)
+                case .reached, .test, .killedBy:
                     break
                 }
             }
@@ -183,7 +188,7 @@ extension Xcodebuild: BatchingHarness {
                 // baseline's worth, so it gets the baseline's allowance.
                 let limit = running.id == Batch.baseline || running.id == Batch.probe
                     ? timeouts.baseline
-                    : timeouts.mutant
+                    : limits[running.id] ?? timeouts.mutant
                 if Date().timeIntervalSince(running.started) > limit {
                     Subprocess.stop(process)
                     stopped = true

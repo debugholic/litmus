@@ -271,6 +271,44 @@ struct BatchTests {
         #expect(runner.probes.last == "none")
     }
 
+    @Test("reads which tests a mutant ran against and which caught it, names with spaces kept")
+    func parseTests() {
+        #expect(Batch.Report.parse("TEST\tApp.T/a()/A.swift:1:1\t빈 값이면 거른다")
+            == .test(id: "App.T/a()/A.swift:1:1", name: "빈 값이면 거른다"))
+        #expect(Batch.Report.parse("COVERED\tA_B_1\tApp.T/a()/A.swift:1:1\tApp.T/b()/A.swift:5:1")
+            == .covered("A_B_1", tests: ["App.T/a()/A.swift:1:1", "App.T/b()/A.swift:5:1"]))
+        #expect(Batch.Report.parse("KILLEDBY\tA_B_1\tApp.T/b()/A.swift:5:1")
+            == .killedBy("A_B_1", tests: ["App.T/b()/A.swift:5:1"]))
+    }
+
+    @Test("reads how long a test took alone")
+    func parseTime() {
+        #expect(Batch.Report.parse("TIME\tApp.T/a()/A.swift:1:1\t0.25") == .timed("App.T/a()/A.swift:1:1", seconds: 0.25))
+        #expect(Batch.Report.parse("TIME\tApp.T/a()/A.swift:1:1\tsoon") == nil)
+    }
+
+    /// The baseline carries the process's first run and swung from 2s to
+    /// 25s between two runs, so a hung mutant waited one minute or four.
+    @Test("gives a mutant ten times what its tests took alone, never under the floor")
+    func mutantLimit() {
+        var timeouts = Batch.Timeouts()
+        timeouts.floor = 60
+        timeouts.mutant = 250
+        timeouts.tests = ["a": 4, "b": 5, "c": 0.1]
+
+        #expect(timeouts.mutant(running: ["a", "b"]) == 90)
+        #expect(timeouts.mutant(running: ["c"]) == 60)
+        // A test the probe did not time: back to the baseline's measure.
+        #expect(timeouts.mutant(running: ["a", "unknown"]) == 250)
+        #expect(timeouts.mutant(running: []) == 250)
+    }
+
+    @Test("finds a test's file in its id")
+    func testFile() {
+        #expect(TestRef(id: "App.Suite/check(value:)/CheckTests.swift:12:5", name: "x").file == "CheckTests.swift")
+        #expect(TestRef(id: "no file here", name: "x").file == nil)
+    }
+
     @Test("reads a switch the tests passed through from the driver's report")
     func parseReached() {
         #expect(Batch.Report.parse("REACHED A_B_1_2_3") == .reached("A_B_1_2_3"))

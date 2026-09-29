@@ -122,4 +122,35 @@ struct StrykerReportTests {
         #expect(StrykerReport.column(14, onLine: 1, of: lines) == 10)
         #expect(StrykerReport.column(3, onLine: 1, of: lines) == 3)
     }
+
+    @Test("names the tests that passed through a mutant and the ones that caught it")
+    func tests() throws {
+        let trees = try Trees(original: "let x = a == b\n")
+        let reaching = TestRef(id: "App.T/a()/ATests.swift:3:5", name: "빈 값이면 거른다")
+        let catching = TestRef(id: "App.T/b()/ATests.swift:9:5", name: "b()")
+        var result = MutantResult(
+            mutant: Mutant(
+                filePath: trees.copy.appendingPathComponent("Sources/A.swift").path,
+                line: 1, column: 11, utf8Offset: 10,
+                operator: "RelationalOperatorReplacement", description: "changed == to !="
+            ),
+            verdict: .killed,
+            duration: 0
+        )
+        result.coveredBy = [reaching, catching]
+        result.killedBy = [catching]
+
+        let json = try StrykerReport(
+            MutationRun.Summary(results: [result], duration: 0), workingCopy: trees.copy, project: trees.project
+        ).json()
+        let root = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        let mutant = try onlyMutant(root)
+
+        #expect(mutant["coveredBy"] as? [String] == [reaching.id, catching.id])
+        #expect(mutant["killedBy"] as? [String] == [catching.id])
+
+        let testFiles = try #require(root["testFiles"] as? [String: [String: Any]])
+        let listed = try #require(testFiles["ATests.swift"]?["tests"] as? [[String: String]])
+        #expect(listed == [["id": reaching.id, "name": "빈 값이면 거른다"], ["id": catching.id, "name": "b()"]])
+    }
 }

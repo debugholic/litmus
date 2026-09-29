@@ -110,4 +110,24 @@ public struct MutantResult: Sendable {
     public let mutant: Mutant
     public let verdict: Verdict
     public let duration: TimeInterval
+    /// The tests that pass through the mutant, when a probe found them.
+    public var coveredBy: [TestRef] = []
+    /// The tests that failed with the mutant on.
+    public var killedBy: [TestRef] = []
+}
+
+/// A test, by the id Swift Testing gives it and the name it was given.
+public struct TestRef: Sendable, Hashable {
+    public let id: String
+    public let name: String
+    /// How long it took on its own, when the probe timed it.
+    public var duration: TimeInterval?
+
+    /// `Module.Suite/function()/File.swift:12:5` gives `File.swift`.
+    public var file: String? {
+        guard let last = id.split(separator: "/").last, let file = last.split(separator: ":").first,
+              file.hasSuffix(".swift")
+        else { return nil }
+        return String(file)
+    }
 }

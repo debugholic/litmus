@@ -47,9 +47,14 @@ public struct Report: Sendable {
         var lines: [String] = []
 
         if let score = summary.score {
-            lines.append("Litmus score \(percent(score))")
+            lines.append("Litmus score \(percent(score)) — caught of the mutants the tests reach")
         } else {
             lines.append("Litmus score —")
+        }
+        // A high score over a sliver of the code reads as a safe suite. The
+        // share of all mutants caught says how much of the code is guarded.
+        if let whole = summary.mutationScore, summary.noCoverage > 0 {
+            lines.append("mutation score \(percent(whole)) — caught of every mutant, reached or not")
         }
         lines.append(counts(summary.results))
 
@@ -67,6 +72,8 @@ public struct Report: Sendable {
             }
         }
 
+        lines += slowest()
+
         let gaps = FunctionGap.find(in: summary.results)
         guard !gaps.isEmpty else { return lines.joined(separator: "\n") }
 
@@ -79,6 +86,15 @@ public struct Report: Sendable {
             lines.append("")
             lines.append("\(gap.status.rawValue.padding(toLength: 9, withPad: " ", startingAt: 0))"
                 + "\(gap.name)  \(gap.caught) of \(gap.scored) caught")
+            // Once for the function: its survivors are mostly passed by the
+            // same tests, and a line under each said the same thing again.
+            var passing: [TestRef] = []
+            for test in gap.survivors.flatMap(\.coveredBy) where !passing.contains(test) {
+                passing.append(test)
+            }
+            if let line = Self.passedThrough(by: passing) {
+                lines.append("  \(line)")
+            }
             for survivor in gap.survivors {
                 let mutant = survivor.mutant
                 let kind = survivor.gapKind.rawValue.padding(toLength: kindWidth, withPad: " ", startingAt: 0)
@@ -87,6 +103,36 @@ public struct Report: Sendable {
         }
 
         return lines.joined(separator: "\n")
+    }
+
+    /// The five tests that cost the run most, when the probe timed them.
+    /// A slow test is paid for once per mutant it reaches, so its time
+    /// alone does not say how much it slows a run down.
+    private func slowest() -> [String] {
+        let timed = summary.tests.filter { $0.cost != nil }.prefix(5)
+        guard !timed.isEmpty else { return [] }
+
+        var lines = ["", "slowest tests — each runs once for every mutant it reaches:"]
+        for score in timed {
+            let cost = seconds(score.cost ?? 0)
+            let each = seconds(score.test.duration ?? 0)
+            lines.append("  \(String(repeating: " ", count: max(0, 7 - cost.count)))\(cost)"
+                + "  \(each) × \(score.reached)  \(score.test.name)")
+        }
+        return lines
+    }
+
+    private func seconds(_ value: TimeInterval) -> String {
+        value < 10 ? String(format: "%.1fs", value) : "\(Int(value.rounded()))s"
+    }
+
+    /// The tests that ran through a survivor and passed anyway: the ones
+    /// that need the check. Three by name, and a count for the rest.
+    static func passedThrough(by tests: [TestRef]) -> String? {
+        guard !tests.isEmpty else { return nil }
+        let named = tests.prefix(3).map(\.name).joined(separator: ", ")
+        let more = tests.count > 3 ? " and \(tests.count - 3) more" : ""
+        return "passed by: \(named)\(more)"
     }
 
     /// The change in one line: the code before and after, or what was
@@ -110,6 +156,9 @@ public struct Report: Sendable {
     private func json() throws -> String {
         let payload: [String: Any] = [
             "score": summary.score as Any,
+            "testStrength": summary.testStrength as Any,
+            "mutationScore": summary.mutationScore as Any,
+            "noCoverage": summary.noCoverage,
             "killed": summary.killed,
             "survived": summary.survived,
             "timeout": summary.timedOut,
@@ -127,6 +176,15 @@ public struct Report: Sendable {
                     "error": file.count(.error),
                 ] as [String: Any]
             },
+            "tests": summary.tests.map { score in
+                [
+                    "name": score.test.name,
+                    "file": score.test.file as Any,
+                    "duration": score.test.duration as Any,
+                    "reached": score.reached,
+                    "killed": score.killed,
+                ] as [String: Any]
+            },
             "mutants": summary.results.sorted(by: sortedByLocation).map { result in
                 [
                     "file": result.mutant.fileName,
@@ -136,6 +194,8 @@ public struct Report: Sendable {
                     "description": result.mutant.description,
                     "verdict": result.verdict.rawValue,
                     "duration": result.duration,
+                    "coveredBy": result.coveredBy.map(\.name),
+                    "killedBy": result.killedBy.map(\.name),
                 ] as [String: Any]
             },
         ]
