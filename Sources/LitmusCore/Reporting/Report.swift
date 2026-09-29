@@ -79,13 +79,19 @@ public struct Report: Sendable {
             lines.append("")
             lines.append("\(gap.status.rawValue.padding(toLength: 9, withPad: " ", startingAt: 0))"
                 + "\(gap.name)  \(gap.caught) of \(gap.scored) caught")
+            // Once for the function: its survivors are mostly passed by the
+            // same tests, and a line under each said the same thing again.
+            var passing: [TestRef] = []
+            for test in gap.survivors.flatMap(\.coveredBy) where !passing.contains(test) {
+                passing.append(test)
+            }
+            if let line = Self.passedThrough(by: passing) {
+                lines.append("  \(line)")
+            }
             for survivor in gap.survivors {
                 let mutant = survivor.mutant
                 let kind = survivor.gapKind.rawValue.padding(toLength: kindWidth, withPad: " ", startingAt: 0)
                 lines.append("  \(location(of: survivor))  \(kind)  \(Self.what(mutant))")
-                if let passing = Self.passedThrough(by: survivor.coveredBy) {
-                    lines.append("      \(passing)")
-                }
             }
         }
 
