@@ -64,6 +64,20 @@ public struct MutationRun: Sendable {
         /// Caught over everything that actually produced a verdict.
         public var score: Double? { Self.score(results) }
 
+        /// The same as `score`, by the name other reports give it: how much
+        /// of what the tests reach they catch.
+        public var testStrength: Double? { score }
+
+        /// Caught over every mutant that ran, reached or not: how much of the
+        /// code the tests guard. Mutants that did not build or could not run
+        /// are left out, as they are from `score`.
+        public var mutationScore: Double? {
+            let caught = results.count { $0.verdict == .killed || $0.verdict == .timedOut }
+            let total = caught + survived + noCoverage
+            guard total > 0 else { return nil }
+            return Double(caught) / Double(total) * 100
+        }
+
         /// A score for each file, weakest first.
         public var files: [FileScore] {
             let paths = results.map(\.mutant.filePath)

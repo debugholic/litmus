@@ -47,9 +47,14 @@ public struct Report: Sendable {
         var lines: [String] = []
 
         if let score = summary.score {
-            lines.append("Litmus score \(percent(score))")
+            lines.append("Litmus score \(percent(score)) — caught of the mutants the tests reach")
         } else {
             lines.append("Litmus score —")
+        }
+        // A high score over a sliver of the code reads as a safe suite. The
+        // share of all mutants caught says how much of the code is guarded.
+        if let whole = summary.mutationScore, summary.noCoverage > 0 {
+            lines.append("mutation score \(percent(whole)) — caught of every mutant, reached or not")
         }
         lines.append(counts(summary.results))
 
@@ -151,6 +156,9 @@ public struct Report: Sendable {
     private func json() throws -> String {
         let payload: [String: Any] = [
             "score": summary.score as Any,
+            "testStrength": summary.testStrength as Any,
+            "mutationScore": summary.mutationScore as Any,
+            "noCoverage": summary.noCoverage,
             "killed": summary.killed,
             "survived": summary.survived,
             "timeout": summary.timedOut,

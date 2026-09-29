@@ -22,6 +22,17 @@ struct SummaryScoreTests {
         MutationRun.Summary(results: verdicts.map(result), duration: 0)
     }
 
+    /// The same definitions another report uses: test strength over what the
+    /// tests reach, mutation score over everything that ran.
+    @Test("counts a mutant no test reaches in the mutation score, not the test strength")
+    func twoMeasures() {
+        let run = summary([.killed, .timedOut, .survived, .noCoverage, .noCoverage, .noCoverage, .unviable, .error])
+
+        #expect(run.testStrength.map { ($0 * 100).rounded() / 100 } == 66.67)
+        #expect(run.mutationScore == 2.0 / 6.0 * 100)
+        #expect(summary([.unviable]).mutationScore == nil)
+    }
+
     @Test("is killed over killed plus survived")
     func ratio() {
         #expect(summary([.killed, .survived]).score == 50)

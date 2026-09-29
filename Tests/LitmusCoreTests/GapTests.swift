@@ -136,4 +136,16 @@ struct GapTests {
         #expect(rendered.contains("slowest tests — each runs once for every mutant it reaches:"))
         #expect(rendered.contains("   6.0s  3.0s × 2  느린 테스트"))
     }
+
+    @Test("plain report adds the mutation score when some mutants no test reaches")
+    func plainMutationScore() {
+        let reached = Report(MutationRun.Summary(results: [result(1, .killed, in: "f()")], duration: 1))
+        let partly = Report(MutationRun.Summary(results: [
+            result(1, .killed, in: "f()"), result(2, .noCoverage, in: "g()"),
+            result(3, .noCoverage, in: "g()"), result(4, .noCoverage, in: "g()"),
+        ], duration: 1))
+
+        #expect(!(try! reached.rendered(as: .plain)).contains("mutation score"))
+        #expect((try! partly.rendered(as: .plain)).contains("mutation score 25% — caught of every mutant, reached or not"))
+    }
 }
