@@ -230,6 +230,19 @@ struct HarnessTests {
         }
     }
 
+    /// Without a profile the xccov report is all there is; a profile that
+    /// cannot be read must not stop the coverage run.
+    @Test("reads no profile coverage when the run left no profile")
+    func noProfile() throws {
+        let derived = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("litmus-dd-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: derived.appendingPathComponent("Build/Products"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: derived) }
+
+        let xcodebuild = Xcodebuild(workingDirectory: workingDirectory, scheme: "MyApp", derivedDataPath: derived)
+
+        #expect(xcodebuild.profileCoverage() == nil)
+    }
+
     @Test("finds the xctestrun the build left behind")
     func xcodebuildFindsXctestrun() throws {
         let tool = try FakeTool()
