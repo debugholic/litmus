@@ -62,4 +62,36 @@ struct TestSourcesTests {
 
         #expect(!TestSources.allSwiftTesting(in: tree.root))
     }
+
+    /// Quick specs and cases on a project's own base class are XCTest too;
+    /// read as Swift Testing, they were never run against a mutant.
+    @Test("counts a Quick spec and a subclass of a base case as XCTest")
+    func xctestInDisguise() {
+        #expect(TestedScope.declaresXCTestCase(in: """
+        import Quick
+        import Nimble
+        final class PlayerSpec: QuickSpec {
+            override class func spec() {}
+        }
+        """))
+        #expect(TestedScope.declaresXCTestCase(in: """
+        @testable import App
+        import XCTest
+        final class LoginTests: BaseTestCase {
+            func testLogin() {}
+        }
+        """))
+        #expect(!TestedScope.declaresXCTestCase(in: """
+        import Testing
+        import Nimble
+        struct PlayerTests {
+            @Test func plays() { expect(1).to(equal(1)) }
+        }
+        """))
+        // Helpers that import XCTest but declare no case.
+        #expect(!TestedScope.declaresXCTestCase(in: """
+        import XCTest
+        extension Double { var rounded2: Double { (self * 100).rounded() / 100 } }
+        """))
+    }
 }

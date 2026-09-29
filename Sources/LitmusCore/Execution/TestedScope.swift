@@ -144,8 +144,25 @@ extension TestedScope {
         return swiftTesting ? nil : "\(target.name) has no Swift Testing tests"
     }
 
+    /// Whether the file declares tests XCTest runs.
+    ///
+    /// `: XCTestCase` alone missed a Quick spec (`: QuickSpec`, `: AsyncSpec`)
+    /// and a case built on a project's own base class. A target of those and
+    /// Swift Testing went to the batch, which reruns Swift Testing only, and
+    /// every mutant only they would have caught came back a survivor. So a
+    /// file that imports XCTest or Quick and subclasses anything counts too.
     static func declaresXCTestCase(in source: String) -> Bool {
-        source.range(of: #":\s*XCTestCase\b"#, options: .regularExpression) != nil
+        if source.range(of: #":\s*XCTestCase\b"#, options: .regularExpression) != nil { return true }
+
+        let importsXCTest = source.range(
+            of: #"(?m)^\s*(?:@testable\s+|@preconcurrency\s+)*import\s+(?:XCTest|Quick)\b"#,
+            options: .regularExpression
+        ) != nil
+        let subclasses = source.range(
+            of: #"(?m)^\s*(?:(?:public|open|internal|final|private|fileprivate|@\w+)\s+)*class\s+\w+\s*:\s*\w"#,
+            options: .regularExpression
+        ) != nil
+        return importsXCTest && subclasses
     }
 
     /// Test target names from either `.xctestrun` layout.
