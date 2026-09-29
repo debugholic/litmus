@@ -19,16 +19,36 @@ public struct Report: Sendable {
     /// files where the mutants say they are.
     let workingCopy: URL?
     let project: URL?
+    /// What was run, when and on what.
+    let run: RunInfo?
 
-    public init(_ summary: MutationRun.Summary, workingCopy: URL? = nil, project: URL? = nil) {
+    public init(_ summary: MutationRun.Summary, workingCopy: URL? = nil, project: URL? = nil, run: RunInfo? = nil) {
         self.summary = summary
         self.workingCopy = workingCopy
         self.project = project
+        self.run = run
     }
 
     private var stryker: StrykerReport {
         let root = workingCopy ?? URL(fileURLWithPath: "/")
-        return StrykerReport(summary, workingCopy: root, project: project ?? root)
+        return StrykerReport(summary, workingCopy: root, project: project ?? root, run: run)
+    }
+
+    /// `took 12m 28s — build 1m 5s, launch and baseline 40s, mutants 10m 43s`
+    static func took(_ summary: MutationRun.Summary) -> String? {
+        guard summary.duration > 0 else { return nil }
+        var parts: [String] = []
+        if summary.phases.build > 0 { parts.append("build \(duration(summary.phases.build))") }
+        if summary.phases.baseline > 0 { parts.append("launch and baseline \(duration(summary.phases.baseline))") }
+        if !parts.isEmpty { parts.append("mutants \(duration(summary.mutantTime))") }
+        return "took \(duration(summary.duration))" + (parts.isEmpty ? "" : " — " + parts.joined(separator: ", "))
+    }
+
+    static func duration(_ value: TimeInterval) -> String {
+        let total = Int(value.rounded())
+        if total < 60 { return "\(total)s" }
+        if total < 3600 { return "\(total / 60)m \(total % 60)s" }
+        return "\(total / 3600)h \(total % 3600 / 60)m"
     }
 
     public func rendered(as format: ReportFormat) throws -> String {
@@ -97,6 +117,10 @@ public struct Report: Sendable {
         let plan = TestPlan(summary.results)
         lines += unchecked(plan)
         lines += unreached(plan)
+
+        // Last: what the numbers above were measured on.
+        if let run { lines += ["", "run \(run.line)"] }
+        if let took = Self.took(summary) { lines.append(took) }
 
         return lines.joined(separator: "\n")
     }
@@ -213,6 +237,17 @@ public struct Report: Sendable {
             "unviable": summary.unviable,
             "error": summary.errored,
             "duration": summary.duration,
+            "run": [
+                "date": run.map { ISO8601DateFormatter().string(from: $0.date) } as Any,
+                "commit": run?.commit as Any,
+                "branch": run?.branch as Any,
+                "version": run?.version as Any,
+                "operators": run?.operators as Any,
+                "harness": run?.harness as Any,
+                "build": summary.phases.build,
+                "baseline": summary.phases.baseline,
+                "mutants": summary.mutantTime,
+            ] as [String: Any],
             "files": summary.files.map { file in
                 [
                     "path": file.path,

@@ -14,11 +14,13 @@ public struct StrykerReport: Sendable {
     /// The report shows the original: the copy has every switch written in.
     let workingCopy: URL
     let project: URL
+    let run: RunInfo?
 
-    public init(_ summary: MutationRun.Summary, workingCopy: URL, project: URL) {
+    public init(_ summary: MutationRun.Summary, workingCopy: URL, project: URL, run: RunInfo? = nil) {
         self.summary = summary
         self.workingCopy = workingCopy
         self.project = project
+        self.run = run
     }
 
     public func json() throws -> String {
@@ -84,6 +86,7 @@ public struct StrykerReport: Sendable {
         <div class="bar" title="caught \(caught), survived \(summary.survived)"><i style="width: \(String(format: "%.1f", share))%"></i></div>
         """ : "")
         <p class="counts">caught \(caught) · survived \(summary.survived) · no test reaches \(summary.noCoverage)\(summary.unviable > 0 ? " · did not build \(summary.unviable)" : "")</p>
+        \([run.map { Self.escape($0.line) }, Report.took(summary)].compactMap { $0 }.map { "<p class=\"run\">\($0)</p>" }.joined(separator: "\n"))
         """)
 
         let areas = summary.areas
@@ -198,6 +201,7 @@ public struct StrykerReport: Sendable {
     .litmus .bar { height: 8px; border-radius: 4px; background: var(--bad); margin: 16px 0 4px; overflow: hidden; }
     .litmus .bar i { display: block; height: 100%; background: var(--ok); }
     .litmus .counts { color: var(--muted); margin: 0 0 8px; }
+    .litmus .run { color: var(--muted); font-size: 12px; margin: 0; }
     .litmus h2 { font-size: 18px; margin: 28px 0 8px; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
     .litmus h3 { font-size: 15px; margin: 18px 0 2px; }
     .litmus h4 { font-size: 14px; margin: 8px 0 2px 12px; }
@@ -250,12 +254,23 @@ public struct StrykerReport: Sendable {
             ] as [String: Any]
         }
 
+        var framework: [String: Any] = ["name": "Litmus"]
+        if let version = run?.version { framework["version"] = version }
+
         var report: [String: Any] = [
             "schemaVersion": "2",
             "thresholds": ["high": 80, "low": 60],
-            "framework": ["name": "Litmus"],
+            "framework": framework,
             "files": files,
         ]
+        // The schema's own names for the three parts of a run, in milliseconds.
+        if summary.duration > 0 {
+            report["performance"] = [
+                "setup": Int(summary.phases.build * 1000),
+                "initialRun": Int(summary.phases.baseline * 1000),
+                "mutation": Int(summary.mutantTime * 1000),
+            ]
+        }
         let tests = testFiles()
         if !tests.isEmpty { report["testFiles"] = tests }
         return report
