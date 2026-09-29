@@ -71,7 +71,10 @@ public struct BuildRepair: Sendable {
             // too is taken out.
             let toCopy = Set(inFile.filter { ids.contains($0.switchName) && $0.isOperatorSwap }.map(\.switchName))
                 .subtracting(copied)
-            let pulled = ids.subtracting(toCopy)
+            // A call that does not fit its operands is the likelier fault
+            // than anything beside it on the line: move it and build again
+            // before taking anything out.
+            let pulled = toCopy.isEmpty ? ids : []
             copies[path] = copied.union(toCopy)
             moved += toCopy.count
 

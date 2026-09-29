@@ -83,6 +83,28 @@ struct BuildRepairTests {
         #expect(!injected.text.contains(flag))
     }
 
+    /// `.now() + delay` does not fit the numeric helper; the call removed
+    /// on the same line was taken out with it, and it builds fine.
+    @Test("keeps a mutant that shares a line with an operator it moves back")
+    func sharedLine() throws {
+        let injected = try Injected("""
+        import Foundation
+        func f(_ delay: Double) {
+            schedule(at: Date() + delay)
+        }
+        func schedule(at date: Date) {}
+        """)
+        let call = try #require(injected.mutants.first { $0.operator == "RemoveSideEffects" })
+        let plus = try #require(injected.mutants.first { $0.description == "changed + to -" })
+        let line = injected.lineNumber(containing: plus)
+
+        let outcome = try injected.repair("\(injected.file):\(line):22: error: cannot convert value of type 'Date'")
+
+        #expect(outcome.removed.isEmpty)
+        #expect(outcome.moved == 1)
+        #expect(injected.text.contains(MutationSwitch.flagName(call.switchName)))
+    }
+
     @Test("finds the call an error points into when the flag is on another line")
     func multilineCall() throws {
         let file = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -105,8 +127,10 @@ struct BuildRepairTests {
         let first = try injected.repair("\(injected.file):1:1: error: something further down broke")
         let second = try injected.repair("\(injected.file):1:1: error: something further down broke")
 
-        // Operators go back to copies first; what is left goes the second time.
+        // Operators go back to copies first, and nothing is taken out while
+        // they might be the fault; what is left goes the second time.
         #expect(first.moved == 3)
+        #expect(first.removed.isEmpty)
         #expect(Set((first.removed + second.removed).map(\.switchName)) == Set(injected.mutants.map(\.switchName)))
         #expect(injected.text == Self.source)
     }

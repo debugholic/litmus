@@ -97,16 +97,6 @@ enum MutationSwitch {
         .with(\.trailingTrivia, original.trailingTrivia)
     }
 
-    /// `!(expression)`
-    static func negated(_ expression: ExprSyntax) -> ExprSyntax {
-        ExprSyntax(
-            PrefixOperatorExprSyntax(
-                operator: .prefixOperator("!"),
-                expression: parenthesized(expression.with(\.leadingTrivia, []).with(\.trailingTrivia, []))
-            )
-        )
-    }
-
     /// `if !flag { statement }`
     ///
     /// Guarding the statement costs one line. Copying the block to leave the
