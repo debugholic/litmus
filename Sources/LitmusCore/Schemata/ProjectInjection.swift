@@ -107,7 +107,7 @@ public struct ProjectInjection: Sendable {
         // original tree. Re-keying it onto the copy is what makes the lookup
         // below match anything at all.
         let coverage = coverage?.rebased(onto: files.map(\.path))
-        let changed = changed?.rebased(onto: files.map(\.path))
+        let changed = changed?.rebased(onto: files.map(\.path), root: workingCopy)
 
         for file in files {
             if let include, !file.path.contains(include) { continue }

@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 
 @testable import LitmusCore
@@ -96,5 +97,68 @@ struct ChangedLinesTests {
 
         #expect(changed.includes(path: "/tmp/copy-99/Sources/App/Edited.swift", line: 10))
         #expect(!changed.includes(path: "/tmp/copy-99/Sources/App/Edited.swift", line: 13))
+    }
+
+    /// Git puts a path it will not write plainly in quotes with octal
+    /// escapes, and ends one with a space in it with a tab. Read as written,
+    /// a Korean file name matched nothing and its changes were never mutated.
+    @Test("reads a quoted, escaped or tab-ended path from the diff")
+    func quotedPaths() {
+        #expect(GitDiff.path("\"b/\\355\\225\\234\\352\\270\\200.swift\"") == "b/한글.swift")
+        #expect(GitDiff.path("b/한글 파일.swift\t") == "b/한글 파일.swift")
+        #expect(GitDiff.path("\"b/say \\\"hi\\\".swift\"") == "b/say \"hi\".swift")
+        #expect(GitDiff.path("b/Plain.swift") == "b/Plain.swift")
+    }
+
+    @Test("finds the changed lines of a file with a Korean name and a space")
+    func koreanFileName() throws {
+        let repo = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("litmus-diff-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        func git(_ arguments: String...) throws {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            process.arguments = ["-c", "user.name=t", "-c", "user.email=t@t"] + arguments
+            process.currentDirectoryURL = repo
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            process.waitUntilExit()
+        }
+
+        try git("init", "-q")
+        try git("commit", "-q", "--allow-empty", "-m", "base")
+        try git("branch", "base")
+        try "let a = 1\nlet b = a > 0\n".write(to: repo.appendingPathComponent("재생 설정.swift"), atomically: true, encoding: .utf8)
+        try git("add", "-A")
+        try git("commit", "-q", "-m", "change")
+
+        let changed = try GitDiff.changed(since: "base", in: repo)
+
+        #expect(changed.includes(path: "재생 설정.swift", line: 2))
+    }
+
+    /// Matching by shared ending needs two components to agree, and a file
+    /// at the project's root has one.
+    @Test("matches a file at the project's root by its path under the copy")
+    func rootFile() {
+        let changed = ChangedLines(lines: ["Main.swift": [3], "Sources/App/Main.swift": [9]])
+        let copy = URL(fileURLWithPath: "/tmp/copy")
+
+        let rebased = changed.rebased(onto: ["/tmp/copy/Main.swift", "/tmp/copy/Sources/App/Main.swift"], root: copy)
+
+        #expect(rebased.includes(path: "/tmp/copy/Main.swift", line: 3))
+        #expect(rebased.includes(path: "/tmp/copy/Sources/App/Main.swift", line: 9))
+        #expect(!rebased.includes(path: "/tmp/copy/Main.swift", line: 9))
+    }
+
+    @Test("keys a project in a folder of its repository from its own root")
+    func projectInFolder() {
+        let changed = ChangedLines(lines: ["Packages/Player/Sources/A.swift": [1], "App/B.swift": [2]])
+            .relative(to: "Packages/Player/")
+
+        #expect(changed.includes(path: "Sources/A.swift", line: 1))
+        #expect(changed.fileCount == 1)
     }
 }

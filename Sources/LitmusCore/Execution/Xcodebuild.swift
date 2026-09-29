@@ -198,6 +198,60 @@ public struct Xcodebuild: Sendable, TestHarness {
     /// ran. Reading it saves running the whole suite again once the failing
     /// targets are out.
     public func lastCoverage() throws -> Coverage {
+        // Line by line from the profile, when it can be read: xccov lists a
+        // Swift package's library, linked into its test bundle, as a target
+        // with no files, so nothing in it was ever filtered out.
+        if let lines = profileCoverage(), !lines.isEmpty {
+            return lines
+        }
+        return try xccovCoverage()
+    }
+
+    /// `llvm-cov export` over every test bundle the build made, with the
+    /// profile the run wrote. Nil when either is missing or llvm-cov fails.
+    func profileCoverage() -> Coverage? {
+        let root = derivedDataPath.appendingPathComponent("Build")
+        let manager = FileManager.default
+
+        guard let walker = manager.enumerator(
+            at: root.appendingPathComponent("ProfileData"),
+            includingPropertiesForKeys: [.contentModificationDateKey]
+        ) else { return nil }
+        let profiles = walker.compactMap { $0 as? URL }.filter { $0.lastPathComponent == "Coverage.profdata" }
+        guard let profile = profiles.max(by: {
+            let lhs = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            let rhs = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            return lhs < rhs
+        }) else { return nil }
+
+        let products = root.appendingPathComponent("Products")
+        let platforms = (try? manager.contentsOfDirectory(at: products, includingPropertiesForKeys: nil)) ?? []
+        let binaries = platforms
+            .flatMap { (try? manager.contentsOfDirectory(at: $0, includingPropertiesForKeys: nil)) ?? [] }
+            .filter { $0.pathExtension == "xctest" }
+            .compactMap { bundle -> URL? in
+                let name = bundle.deletingPathExtension().lastPathComponent
+                return [bundle.appendingPathComponent(name), bundle.appendingPathComponent("Contents/MacOS/\(name)")]
+                    .first { manager.isExecutableFile(atPath: $0.path) }
+            }
+        guard let first = binaries.first else { return nil }
+
+        #if arch(arm64)
+        let arch = "arm64"
+        #else
+        let arch = "x86_64"
+        #endif
+
+        var arguments = ["llvm-cov", "export", "-format=lcov", "-arch", arch, "-instr-profile", profile.path, first.path]
+        for other in binaries.dropFirst() { arguments += ["-object", other.path] }
+
+        guard let (lcov, status) = try? run(executable: "/usr/bin/xcrun", arguments: arguments), status == 0 else {
+            return nil
+        }
+        return Lcov.parse(lcov)
+    }
+
+    private func xccovCoverage() throws -> Coverage {
         let bundle = coverageBundle
         let (report, reportStatus) = try run(
             executable: "/usr/bin/xcrun",

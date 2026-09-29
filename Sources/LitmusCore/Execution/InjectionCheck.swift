@@ -7,8 +7,8 @@ import Foundation
 /// the tests pass, and the mutant looks like it survived. That reads as a hole
 /// in the test suite when the truth is that nothing was ever changed.
 ///
-/// The switch name is written into the source verbatim, so its presence is a
-/// cheap and exact check.
+/// The switch name is written into the source verbatim, in quotes, so its
+/// presence is a cheap and exact check.
 public struct InjectionCheck: Sendable {
     public struct Outcome: Sendable {
         public let injected: [Mutant]
@@ -38,7 +38,9 @@ public struct InjectionCheck: Sendable {
                 continue
             }
 
-            if source.contains(mutant.switchName) {
+            // In quotes, as the switch reads it: bare, `…_1_2_3` was found
+            // inside `…_1_2_34` and a mutant never written passed as there.
+            if source.contains("\"\(mutant.switchName)\"") {
                 injected.append(mutant)
             } else {
                 missing.append(mutant)

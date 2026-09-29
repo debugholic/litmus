@@ -31,12 +31,14 @@ struct SubprocessTests {
             executable: "/bin/sh",
             arguments: ["-c", "echo started; exec sleep 60"],
             directory: directory,
-            timeout: 1
+            // Five seconds, not one: on a busy machine the shell had not
+            // printed before a one-second limit stopped it.
+            timeout: 5
         )
 
         #expect(output.timedOut)
         #expect(output.log.contains("started"))
-        #expect(Date().timeIntervalSince(started) < 20)
+        #expect(Date().timeIntervalSince(started) < 30)
     }
 
     @Test("stops what the tool started, not just the tool")
@@ -50,7 +52,8 @@ struct SubprocessTests {
             executable: "/bin/sh",
             arguments: ["-c", "sh -c 'echo $$ > \(marker.path); exec sleep 60' & wait"],
             directory: directory,
-            timeout: 1
+            // Long enough for the child to write its pid on a busy machine.
+            timeout: 5
         )
 
         let pid = try #require(pid_t(

@@ -33,6 +33,17 @@ struct SummaryScoreTests {
         #expect(summary([.unviable]).mutationScore == nil)
     }
 
+    @Test("says which score falls under its threshold")
+    func shortfalls() {
+        let run = summary([.killed, .survived, .noCoverage, .noCoverage])
+
+        #expect(run.shortfalls(testStrength: 60, mutationScore: nil) == ["Litmus score 50% is under 60%"])
+        #expect(run.shortfalls(testStrength: 50, mutationScore: 30) == ["mutation score 25% is under 30%"])
+        #expect(run.shortfalls(testStrength: nil, mutationScore: nil).isEmpty)
+        // Nothing the tests reach: nothing to judge.
+        #expect(summary([.noCoverage]).shortfalls(testStrength: 80, mutationScore: nil).isEmpty)
+    }
+
     @Test("is killed over killed plus survived")
     func ratio() {
         #expect(summary([.killed, .survived]).score == 50)

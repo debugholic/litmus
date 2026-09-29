@@ -62,4 +62,52 @@ struct TestSourcesTests {
 
         #expect(!TestSources.allSwiftTesting(in: tree.root))
     }
+
+    /// Quick specs and cases on a project's own base class are XCTest too;
+    /// read as Swift Testing, they were never run against a mutant.
+    @Test("counts a Quick spec and a subclass of a base case as XCTest")
+    func xctestInDisguise() {
+        #expect(TestedScope.declaresXCTestCase(in: """
+        import Quick
+        import Nimble
+        final class PlayerSpec: QuickSpec {
+            override class func spec() {}
+        }
+        """))
+        #expect(TestedScope.declaresXCTestCase(in: """
+        @testable import App
+        import XCTest
+        final class LoginTests: BaseTestCase {
+            func testLogin() {}
+        }
+        """))
+        #expect(!TestedScope.declaresXCTestCase(in: """
+        import Testing
+        import Nimble
+        struct PlayerTests {
+            @Test func plays() { expect(1).to(equal(1)) }
+        }
+        """))
+        // Helpers that import XCTest but declare no case.
+        #expect(!TestedScope.declaresXCTestCase(in: """
+        import XCTest
+        extension Double { var rounded2: Double { (self * 100).rounded() / 100 } }
+        """))
+    }
+
+    @Test("sees UIKit however it is imported")
+    func uikitImports() {
+        #expect(PlatformHints.importsUIKit("import UIKit\n"))
+        #expect(PlatformHints.importsUIKit("import Foundation\n@preconcurrency import UIKit\n"))
+        #expect(PlatformHints.importsUIKit("import class UIKit.UIView\n"))
+        #expect(!PlatformHints.importsUIKit("import SwiftUI\n// import UIKit later\n"))
+        #expect(!PlatformHints.importsUIKit("import UIKitExtras\n"))
+    }
+
+    @Test("reads a package for iOS alone from its manifest")
+    func iOSOnly() {
+        #expect(PlatformHints.iOSOnly("platforms: [.iOS(.v15)],"))
+        #expect(!PlatformHints.iOSOnly("platforms: [.iOS(.v15), .macOS(.v13)],"))
+        #expect(!PlatformHints.iOSOnly("name: \"Tool\","))
+    }
 }

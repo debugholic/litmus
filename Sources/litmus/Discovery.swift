@@ -23,7 +23,12 @@ enum Discovery {
             return .xcode
         }
 
-        return importsUIKit(under: project.appendingPathComponent("Sources")) ? .xcode : .swiftpm
+        if importsUIKit(under: project.appendingPathComponent("Sources")) { return .xcode }
+
+        // A package for iOS alone builds with iOS's SDK, which `swift test`
+        // on this Mac does not have, UIKit or not.
+        let manifest = (try? String(contentsOf: project.appendingPathComponent("Package.swift"), encoding: .utf8)) ?? ""
+        return PlatformHints.iOSOnly(manifest) ? .xcode : .swiftpm
     }
 
     private static func importsUIKit(under root: URL) -> Bool {
@@ -32,9 +37,7 @@ enum Discovery {
 
         for case let url as URL in walker where url.pathExtension == "swift" {
             guard let source = try? String(contentsOf: url, encoding: .utf8) else { continue }
-            if source.contains("\nimport UIKit") || source.hasPrefix("import UIKit") {
-                return true
-            }
+            if PlatformHints.importsUIKit(source) { return true }
         }
 
         return false
