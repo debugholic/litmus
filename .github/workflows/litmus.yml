@@ -1,0 +1,64 @@
+name: litmus
+
+# Litmus on its own source, for the score badge in the README. A tool for
+# finding holes in tests should say how many its own tests have.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Only the newest main is worth a badge; an older run still going is wasted.
+concurrency:
+  group: litmus
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  score:
+    runs-on: macos-15
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: swift build -c release
+
+      # --all rather than relying on main having nothing to compare against:
+      # the badge is for the whole tree, and should not narrow if that changes.
+      - name: Run Litmus on itself
+        run: |
+          BIN=$(swift build -c release --show-bin-path)/litmus
+          "$BIN" --all --format json --output litmus.json
+
+      # The shields.io endpoint format. Colours follow the report's own
+      # thresholds: 80 and up is good, under 60 bad.
+      - name: Write the badge
+        run: |
+          mkdir -p badge
+          jq '(.score) as $s | {
+                schemaVersion: 1,
+                label: "litmus score",
+                message: (if $s == null then "—" else "\($s | round)%" end),
+                color: (if $s == null then "lightgrey"
+                        elif $s >= 80 then "brightgreen"
+                        elif $s >= 60 then "yellow"
+                        else "red" end)
+              }' litmus.json > badge/litmus.json
+          cp litmus.json badge/report.json
+          cat badge/litmus.json
+
+      # An orphan branch holding only the badge: the default token can push
+      # it, and main's history is not filled with score bumps.
+      - name: Publish to the badges branch
+        run: |
+          cd badge
+          git init -q -b badges
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -q -m "litmus score for ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" badges
+        env:
+          GH_TOKEN: ${{ github.token }}
