@@ -145,10 +145,14 @@ public struct StrykerReport: Sendable {
                 for entry in group.entries {
                     let gap = entry.gap
                     let member = TestPlan.split(gap.name).member ?? gap.name
+                    // An initialiser with fourteen labels ran over two lines;
+                    // cut, with the whole name on hover.
+                    let shown = member.count > 60 ? String(member.prefix(57)) + "…" : member
                     rows.append("""
                     <tr class="function"><td colspan="4">\
                     <span class="badge \(gap.status == .untested ? "bad" : "warn")">\(gap.status.rawValue)</span>\
-                    \(Self.escape(member)) <span class="muted">\(gap.caught) of \(gap.scored) caught</span></td></tr>
+                    <span title="\(Self.escape(member))">\(Self.escape(shown))</span> \
+                    <span class="muted">\(gap.caught) of \(gap.scored) caught</span></td></tr>
                     """)
                     for survivor in gap.survivors {
                         rows.append("""
