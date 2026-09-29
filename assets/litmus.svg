@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <title>Litmus</title>
+  <style>
+    .paper { fill: #F4A7B4; }
+    .edge  { stroke: #C2506A; }
+    .front { stroke: #1E4FB8; }
+    .halo  { fill: #C9A6E0; }
+    @media (prefers-color-scheme: dark) {
+      .paper { fill: #F7B8C3; }
+      .edge  { stroke: #F7B8C3; }
+    }
+  </style>
+  <defs>
+    <linearGradient id="dye" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#1B47A8"/>
+      <stop offset="0.55" stop-color="#2F6FDB"/>
+      <stop offset="1" stop-color="#5B8BEA"/>
+    </linearGradient>
+    <clipPath id="strip">
+      <rect x="100" y="20" width="56" height="200" rx="7"/>
+    </clipPath>
+  </defs>
+
+  <g transform="rotate(-14 128 128)">
+    <!-- the paper -->
+    <rect class="paper" x="100" y="20" width="56" height="200" rx="7"/>
+
+    <g clip-path="url(#strip)">
+      <!-- the damp margin just ahead of the dye -->
+      <path class="halo" opacity="0.7"
+            d="M96 120 C110 108 122 128 134 116 S152 106 160 114 L160 230 L96 230 Z"/>
+      <!-- the dyed part, climbing unevenly -->
+      <path fill="url(#dye)"
+            d="M96 132 C108 120 120 140 132 128 S150 118 160 126 L160 230 L96 230 Z"/>
+      <!-- the wet front -->
+      <path class="front" fill="none" stroke-width="3" stroke-linecap="round" opacity="0.85"
+            d="M96 132 C108 120 120 140 132 128 S150 118 160 126"/>
+    </g>
+
+    <!-- outline, so the strip holds on a white page -->
+    <rect class="edge" x="100" y="20" width="56" height="200" rx="7"
+          fill="none" stroke-width="2.5" opacity="0.55"/>
+
+    <!-- a drop leaving the dipped end -->
+    <path fill="#2F6FDB"
+          d="M140 226 C140 226 131 238 131 244 A9 9 0 0 0 149 244 C149 238 140 226 140 226 Z"/>
+  </g>
+</svg>
