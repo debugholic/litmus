@@ -20,6 +20,9 @@ public enum FlakyDriver {
     static let driverTest = "test__litmus_flaky"
     static let resultsVariable = "LITMUS_FLAKY_RESULTS"
     static let runsVariable = "LITMUS_FLAKY_RUNS"
+    /// A file of spans, `File.swift`, first line, last line: only the tests
+    /// declared in one run. Without it, every test does.
+    static let pickVariable = "LITMUS_FLAKY_PICK"
 
     /// Whether the driver can run a target's tests, and what it leaves out
     /// when it can: nil to run it, else why not. `note` names XCTest cases
@@ -79,18 +82,42 @@ public enum FlakyDriver {
             try? FileManager.default.removeItem(atPath: stream)
             let _: CInt = await __swiftPMEntryPoint(passing: listing)
 
+            // The tests a change touched, when only those are to run.
+            let picks: [(file: String, lines: ClosedRange<Int>)]? = environment["\#(pickVariable)"].map { path in
+                ((try? String(contentsOfFile: path, encoding: .utf8)) ?? "").split(separator: "\n").compactMap { line in
+                    let fields = line.split(separator: "\t").map(String.init)
+                    guard fields.count == 3, let first = Int(fields[1]), let last = Int(fields[2]), first <= last
+                    else { return nil }
+                    return (fields[0], first...last)
+                }
+            }
+            // `Module.Suite/test()/File.swift:12:5`: the file and the line.
+            func picked(_ id: String) -> Bool {
+                guard let picks else { return true }
+                let place = (id.split(separator: "/").last ?? "").split(separator: ":")
+                guard place.count >= 2, let line = Int(place[1]) else { return false }
+                return picks.contains { $0.file == place[0] && $0.lines.contains(line) }
+            }
+
             var tests: [String] = []
             for object in Self.records(in: stream) {
                 guard
                     object["kind"] as? String == "test",
                     let payload = object["payload"] as? [String: Any],
                     payload["kind"] as? String == "function",
-                    let id = payload["id"] as? String
+                    let id = payload["id"] as? String,
+                    picked(id)
                 else { continue }
                 tests.append(id)
                 record(["TEST", id, (payload["displayName"] as? String) ?? (payload["name"] as? String) ?? id])
             }
             let listed = Set(tests)
+            // An empty filter would be no filter, and run everything.
+            guard !tests.isEmpty else {
+                record(["DONE"])
+                return
+            }
+            let group = picks == nil ? nil : tests.map { NSRegularExpression.escapedPattern(for: $0) }
 
             // One run: the listed tests that ended, and the ones among them
             // that recorded an issue they did not expect.
@@ -141,7 +168,7 @@ public enum FlakyDriver {
                 await pass("reverse", index, alone(test))
             }
             for index in 0..<runs {
-                await pass("suite", index, nil)
+                await pass("suite", index, group)
             }
             for (index, test) in tests.enumerated() {
                 await pass("again", index, alone(test))

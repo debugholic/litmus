@@ -20,6 +20,7 @@ extension Xcodebuild {
         target: String,
         lane: String,
         runs: Int,
+        pick: [ChangedTests.Span]? = nil,
         launchTimeout: TimeInterval = 20 * 60,
         onPass: (FlakyRun) -> Void = { _ in }
     ) async throws -> FlakyRun {
@@ -36,6 +37,15 @@ extension Xcodebuild {
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: scratch) }
         let resultsFile = scratch.appendingPathComponent("results.txt")
+        var environment = [
+            "TEST_RUNNER_\(FlakyDriver.resultsVariable)": resultsFile.path,
+            "TEST_RUNNER_\(FlakyDriver.runsVariable)": String(runs),
+        ]
+        if let pick {
+            let pickFile = scratch.appendingPathComponent("pick.txt")
+            try pick.map(\.line).joined(separator: "\n").write(to: pickFile, atomically: true, encoding: .utf8)
+            environment["TEST_RUNNER_\(FlakyDriver.pickVariable)"] = pickFile.path
+        }
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -48,10 +58,7 @@ extension Xcodebuild {
             "-resultBundlePath", scratch.appendingPathComponent("result.xcresult").path,
             "-only-testing:\(target)/\(FlakyDriver.driverClass)/\(FlakyDriver.driverTest)",
         ]
-        process.environment = ProcessInfo.processInfo.environment.merging([
-            "TEST_RUNNER_\(FlakyDriver.resultsVariable)": resultsFile.path,
-            "TEST_RUNNER_\(FlakyDriver.runsVariable)": String(runs),
-        ]) { _, new in new }
+        process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
 
         // Drained as it comes: a full pipe would stall xcodebuild.
         let log = LogTail()
@@ -72,10 +79,13 @@ extension Xcodebuild {
 
         var report = Batch.Report(url: resultsFile)
         var run = FlakyRun(target: target)
+        run.grouped = pick != nil
         let launched = Date()
 
         func consume() {
-            for line in report.lines() {
+            let lines = report.lines()
+            if run.launch == nil, !lines.isEmpty { run.launch = Date().timeIntervalSince(launched) }
+            for line in lines {
                 let ended = line.hasPrefix("END")
                 run.read(line)
                 if ended { onPass(run) }

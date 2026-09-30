@@ -85,8 +85,67 @@ struct FlakyTests {
         }
 
         let byName = Dictionary(uniqueKeysWithValues: run(lines).verdicts.map { ($0.name, $0) })
-        #expect(byName["once"]?.reasons == ["passes on its first run, then fails every suite run — a test run before it leaves state behind"])
+        #expect(byName["once"]?.reasons == ["passes on its first run, then fails every one of the suite runs — a test run before it leaves state behind"])
         #expect(byName["leans"]?.reasons == ["fails every time"])
+    }
+
+    @Test("says so when a test did not end in every suite run")
+    func missingRuns() {
+        var lines = listing
+        lines += pass("suite", 0, [("steady", true), ("once", true)])
+        lines += pass("suite", 1, [("once", true)])
+
+        let byName = Dictionary(uniqueKeysWithValues: run(lines).verdicts.map { ($0.name, $0) })
+        #expect(byName["steady"]?.reasons == ["ended in only 1 of 2 suite runs"])
+        #expect(byName["once"]?.isStable == true)
+    }
+
+    private let testFile = """
+    import Testing
+
+    func helper() -> Int { 1 }
+
+    @Suite struct T {
+        @Test("first")
+        func first() { #expect(helper() == 1) }
+
+        @Test func second() {
+            #expect(true)
+        }
+    }
+    """
+
+    @Test("picks the test function a changed line is in, attributes and all")
+    func picksChangedTest() {
+        #expect(ChangedTests.spans(in: testFile, changed: [10]) == [9...11])
+        #expect(ChangedTests.spans(in: testFile, changed: [7, 8]) == [6...7])
+    }
+
+    /// A helper or a suite's set-up may be what every test there leans on.
+    @Test("picks the whole file for a change outside any test, and nothing for a blank line")
+    func picksFile() {
+        #expect(ChangedTests.spans(in: testFile, changed: [3]) == [1...12])
+        #expect(ChangedTests.spans(in: testFile, changed: [2]).isEmpty)
+    }
+
+    /// A comment above a new test picked every test in the file.
+    @Test("picks nothing for a comment")
+    func ignoresComments() {
+        let source = testFile + "\n\n// New, and fails now and then.\n@Test func third() {}\n"
+        #expect(ChangedTests.spans(in: source, changed: [14, 15]) == [15...15])
+        #expect(ChangedTests.spans(in: source, changed: [14]).isEmpty)
+    }
+
+    @Test("says runs together, not suite runs, when only changed tests ran")
+    func groupedWording() {
+        var lines = listing
+        lines += pass("suite", 0, [("once", true)])
+        lines += pass("suite", 1, [("once", false)])
+        var grouped = FlakyRun(target: "AppTests")
+        grouped.grouped = true
+        lines.forEach { grouped.read($0) }
+
+        #expect(grouped.verdicts.first { $0.name == "once" }?.reasons == ["fails 1 of 2 runs together"])
     }
 
     @Test("names the test a lone pass stopped in")
@@ -98,6 +157,26 @@ struct FlakyTests {
 
         #expect(stopped.stoppedIn == "App.T/leans()/T.swift:9:2")
         #expect(stopped.verdicts.first { $0.name == "leans" }?.reasons == ["took the process down when run on its own"])
+    }
+
+    /// The spread says whether runs slow down as they pile up in one process.
+    @Test("says where the time went: launch, the lone passes, and each suite run")
+    func timing() throws {
+        var lines = listing
+        lines += ["BEGIN\treverse\t0", "END\treverse\t0\t10", "BEGIN\treverse\t1", "END\treverse\t1\t20"]
+        for (index, seconds) in [1.5, 2.5, 5.0].enumerated() {
+            lines += ["BEGIN\tsuite\t\(index)", "END\tsuite\t\(index)\t\(seconds)"]
+        }
+        lines += ["BEGIN\tagain\t0", "END\tagain\t0\t25"]
+        var timed = run(lines)
+        timed.launch = 105
+
+        #expect(FlakyReport.timing(timed) == ["launch 1m 45s", "alone 30s", "suite 3 × 3.0s (1.5s–5.0s)", "alone again 25s"])
+        timed.read("BEGIN\tagain\t1")
+        timed.read("END\tagain\t1\t0.3")
+        #expect(FlakyReport.timing(timed).last == "alone again 25s")
+        #expect(try FlakyReport(runs: [timed], asked: 3, build: 40, duration: 240).rendered(as: .plain)
+            .contains("took 4m 0s — build 40s, launch 1m 45s, alone 30s, suite 3 × 3.0s (1.5s–5.0s), alone again 25s"))
     }
 
     @Test("reports the unstable tests, and what was left out")

@@ -12,8 +12,17 @@ struct Flaky: AsyncParsableCommand {
 
     @OptionGroup var harness: HarnessOptions
 
-    @Option(help: "How many times to run the whole suite.")
-    var runs: Int = 10
+    @Option(help: "Only run the tests changed since this git ref.")
+    var since: String?
+
+    @Flag(help: "Run every test, not only the ones this branch changed.")
+    var all = false
+
+    @Option(help: """
+    How many times to run the tests together. 100 by default for the tests a \
+    change touched, which are few; 10 with --all, which runs the whole suite.
+    """)
+    var runs: Int?
 
     @Option(help: "Report format: plain or json.")
     var format: FlakyReport.Format = .plain
@@ -22,7 +31,8 @@ struct Flaky: AsyncParsableCommand {
     var output: String?
 
     func validate() throws {
-        guard runs >= 1 else { throw ValidationError("--runs has to be at least 1") }
+        guard (runs ?? 1) >= 1 else { throw ValidationError("--runs has to be at least 1") }
+        guard since == nil || !all else { throw ValidationError("pass --since or --all, not both") }
         // One simulator does it all: the passes are in order, in one process.
         guard harness.workers == 1, harness.simulators.count <= 1 else {
             throw ValidationError("litmus flaky runs on one simulator; drop --workers, and pass one --simulators at most")
@@ -32,6 +42,30 @@ struct Flaky: AsyncParsableCommand {
     func run() async throws {
         let startedAt = Date()
         let project = URL(fileURLWithPath: project).standardizedFileURL
+
+        // The tests this branch changed, as `litmus` takes the lines it
+        // changed. The existing suite already runs once in the pipeline;
+        // repeating it here would be paying for that again.
+        let base = all ? nil : (since ?? Discovery.defaultBase(in: project))
+        var changed: ChangedLines?
+        if let base {
+            let diff = try GitDiff.changed(since: base, in: project)
+            // Said before anything is built: no test file, nothing to rerun.
+            let testFiles = diff.paths.filter { path in
+                (try? String(contentsOf: project.appendingPathComponent(path), encoding: .utf8))?
+                    .contains("import Testing") == true
+            }
+            guard !testFiles.isEmpty else {
+                print("no Swift Testing file has changed since \(base).")
+                print("Pass --all to run every test.")
+                return
+            }
+            changed = diff
+            print("  tests changed since \(base)")
+        } else {
+            print("  every test")
+        }
+        let runs = self.runs ?? (changed == nil ? 10 : 100)
 
         // Beside the mutation run's copy rather than in it, so neither run
         // deletes the other's files; and not under its name, so one run
@@ -60,30 +94,45 @@ struct Flaky: AsyncParsableCommand {
             throw ValidationError("could not tell which test targets the build has")
         }
 
-        var targets: [TestedScope.TestTarget] = []
+        // Each target that can run, with the spans of its changed tests; nil
+        // spans run all of its tests.
+        var targets: [(target: TestedScope.TestTarget, pick: [ChangedTests.Span]?)] = []
         var skipped: [(target: String, reason: String)] = []
         for target in scope.testTargets {
             let fit = FlakyDriver.fit(target)
             if let reason = fit.reason {
-                skipped.append((target.name, reason))
-            } else {
-                targets.append(target)
-                if let note = fit.note { skipped.append((target.name, note)) }
+                if changed == nil { skipped.append((target.name, reason)) }
+                continue
             }
+            var pick: [ChangedTests.Span]?
+            if let changed {
+                let lines = changed.rebased(onto: target.files, root: working)
+                pick = target.files.flatMap { ChangedTests.spans(ofFile: $0, changed: lines.lines(of: $0)) }
+                // A target the change did not touch needs no driver and no launch.
+                guard pick?.isEmpty == false else { continue }
+            }
+            targets.append((target, pick))
+            if let note = fit.note { skipped.append((target.name, note)) }
         }
         guard !targets.isEmpty else {
+            if let base {
+                print("no Swift Testing test the build runs has changed since \(base).")
+                print("Pass --all to run every test.")
+                return
+            }
             throw ValidationError("no test target has Swift Testing tests; litmus flaky reruns those only")
         }
 
         heartbeat.begin("  adding the driver to \(targets.count) test target(s) and rebuilding…")
-        let prepared = try await xcodebuild.prepareFlaky(targets: targets, lane: lane)
+        let prepared = try await xcodebuild.prepareFlaky(targets: targets.map(\.target), lane: lane)
         let buildTook = Date().timeIntervalSince(startedAt)
         heartbeat.end()
 
         var results: [FlakyRun] = []
-        for target in targets {
-            heartbeat.begin("  \(target.name): each test alone, the suite \(runs) time(s), each alone again…")
-            let run = try await xcodebuild.runFlaky(prepared, target: target.name, lane: lane, runs: runs) { run in
+        for (target, pick) in targets {
+            let together = pick == nil ? "the suite" : "the changed tests together"
+            heartbeat.begin("  \(target.name): each test alone, \(together) \(runs) time(s), each alone again…")
+            let run = try await xcodebuild.runFlaky(prepared, target: target.name, lane: lane, runs: runs, pick: pick) { run in
                 heartbeat.report(run.progress(of: runs))
             }
             heartbeat.end()
@@ -97,6 +146,7 @@ struct Flaky: AsyncParsableCommand {
             runs: results,
             skipped: skipped,
             asked: runs,
+            scope: base.map { "changed since \($0)" },
             build: buildTook,
             duration: Date().timeIntervalSince(startedAt),
             run: RunInfo(

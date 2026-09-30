@@ -11,6 +11,8 @@ public struct FlakyReport: Sendable {
     public let skipped: [(target: String, reason: String)]
     /// How many times the suite was asked to run.
     public let asked: Int
+    /// `changed since origin/main`, when only the tests a change touched ran.
+    public let scope: String?
     public let build: TimeInterval
     public let duration: TimeInterval
     public let run: RunInfo?
@@ -19,6 +21,7 @@ public struct FlakyReport: Sendable {
         runs: [FlakyRun],
         skipped: [(target: String, reason: String)] = [],
         asked: Int,
+        scope: String? = nil,
         build: TimeInterval = 0,
         duration: TimeInterval = 0,
         run: RunInfo? = nil
@@ -26,6 +29,7 @@ public struct FlakyReport: Sendable {
         self.runs = runs
         self.skipped = skipped
         self.asked = asked
+        self.scope = scope
         self.build = build
         self.duration = duration
         self.run = run
@@ -48,8 +52,10 @@ public struct FlakyReport: Sendable {
     // MARK: - plain
 
     private func plain() -> String {
-        var lines = ["litmus flaky — \(testCount) test(s) in \(runs.count) target(s): "
-            + "each alone before, the suite \(asked) time(s), each alone again after"]
+        let what = scope.map { "\(testCount) test(s) \($0)" } ?? "\(testCount) test(s)"
+        let together = scope == nil ? "the suite" : "them together"
+        var lines = ["litmus flaky — \(what) in \(runs.count) target(s): "
+            + "each alone before, \(together) \(asked) time(s), each alone again after"]
 
         let unstable = self.unstable
         if unstable.isEmpty {
@@ -89,10 +95,33 @@ public struct FlakyReport: Sendable {
 
         if let run { lines += ["", "run \(run.line)"] }
         if duration > 0 {
-            lines.append("took \(Report.duration(duration))"
-                + (build > 0 ? " — build \(Report.duration(build)), runs \(Report.duration(max(0, duration - build)))" : ""))
+            var parts = build > 0 ? ["build \(Report.duration(build))"] : []
+            if runs.count == 1, let only = runs.first { parts += Self.timing(only) }
+            lines.append("took \(Report.duration(duration))" + (parts.isEmpty ? "" : " — " + parts.joined(separator: ", ")))
+            // A line each when there are several: their suites differ.
+            if runs.count > 1 {
+                for run in runs { lines.append("  \(run.target): " + Self.timing(run).joined(separator: ", ")) }
+            }
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// `launch 1m 45s, alone 30s, suite 100 × 2.7s (1.5s–7.5s), alone again 25s`:
+    /// the spread says whether runs slow down as they pile up in one process.
+    static func timing(_ run: FlakyRun) -> [String] {
+        let timing = run.timing
+        var parts: [String] = []
+        if let launch = timing.launch { parts.append("launch \(Report.duration(launch))") }
+        // Tenths under a minute: a small target's lone passes take less
+        // than a second, which whole seconds call 0s.
+        func time(_ value: TimeInterval) -> String { value < 60 ? Report.seconds(value) : Report.duration(value) }
+        if timing.alone > 0 { parts.append("alone \(time(timing.alone))") }
+        if let suite = timing.suite {
+            parts.append("\(run.grouped ? "together" : "suite") \(run.suiteRuns) × \(Report.seconds(suite.mean))"
+                + " (\(Report.seconds(suite.least))–\(Report.seconds(suite.most)))")
+        }
+        if timing.again > 0 { parts.append("alone again \(time(timing.again))") }
+        return parts
     }
 
     // MARK: - json
@@ -100,6 +129,7 @@ public struct FlakyReport: Sendable {
     private func json() throws -> String {
         let payload: [String: Any] = [
             "suiteRuns": asked,
+            "scope": scope as Any,
             "tests": testCount,
             "unstable": unstable.count,
             "duration": duration,
@@ -108,6 +138,14 @@ public struct FlakyReport: Sendable {
                     "name": run.target,
                     "suiteRuns": run.suiteRuns,
                     "finished": run.finished,
+                    "timing": [
+                        "launch": run.timing.launch as Any,
+                        "alone": run.timing.alone,
+                        "again": run.timing.again,
+                        "suiteMean": run.timing.suite?.mean as Any,
+                        "suiteLeast": run.timing.suite?.least as Any,
+                        "suiteMost": run.timing.suite?.most as Any,
+                    ] as [String: Any],
                     "stopped": run.stop.map { stop in
                         [
                             "phase": stop.phase.rawValue,

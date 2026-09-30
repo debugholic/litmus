@@ -15,6 +15,11 @@ public struct ChangedLines: Sendable {
 
     public var isEmpty: Bool { lines.isEmpty }
     public var fileCount: Int { lines.count }
+    /// The files the change touched, by the paths it is keyed by.
+    public var paths: [String] { Array(lines.keys) }
+
+    /// The touched lines of one file; none when the change missed it.
+    public func lines(of path: String) -> Set<Int> { lines[path] ?? [] }
 
     /// Whether the change reached here.
     ///

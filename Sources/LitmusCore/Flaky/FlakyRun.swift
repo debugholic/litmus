@@ -28,6 +28,9 @@ public struct FlakyRun: Sendable {
     }
 
     public let target: String
+    /// Only the tests a change touched ran, together rather than as the
+    /// whole suite.
+    public var grouped = false
     /// In the order Swift Testing listed them.
     public private(set) var tests: [String] = []
     public private(set) var names: [String: String] = [:]
@@ -36,6 +39,9 @@ public struct FlakyRun: Sendable {
     public private(set) var durations: [String: TimeInterval] = [:]
     public private(set) var finished = false
     public var stop: Stop?
+    /// From launching the tests to the driver's first line: installing and
+    /// starting the app, which a run pays once.
+    public var launch: TimeInterval?
 
     /// The pass that began and has not ended.
     public private(set) var running: (phase: Phase, index: Int, since: Date)?
@@ -68,6 +74,37 @@ public struct FlakyRun: Sendable {
         default:
             break
         }
+    }
+
+    /// Where the time went, pass by pass.
+    public struct Timing: Sendable, Equatable {
+        public let launch: TimeInterval?
+        /// Every test alone, before and after the suite.
+        public let alone: TimeInterval
+        public let again: TimeInterval
+        /// One suite run: the mean, the quickest and the slowest.
+        public let suite: (mean: TimeInterval, least: TimeInterval, most: TimeInterval)?
+
+        public static func == (lhs: Timing, rhs: Timing) -> Bool {
+            lhs.launch == rhs.launch && lhs.alone == rhs.alone && lhs.again == rhs.again
+                && lhs.suite?.mean == rhs.suite?.mean && lhs.suite?.least == rhs.suite?.least
+                && lhs.suite?.most == rhs.suite?.most
+        }
+    }
+
+    public var timing: Timing {
+        func times(_ phase: Phase) -> [TimeInterval] {
+            durations.filter { $0.key.hasPrefix("\(phase.rawValue) ") }.map(\.value)
+        }
+        let suite = times(.suite)
+        return Timing(
+            launch: launch,
+            alone: times(.reverse).reduce(0, +),
+            again: times(.again).reduce(0, +),
+            suite: suite.isEmpty
+                ? nil
+                : (suite.reduce(0, +) / Double(suite.count), suite.min() ?? 0, suite.max() ?? 0)
+        )
     }
 
     /// The longest pass so far, to judge a stuck one by.
@@ -118,13 +155,14 @@ public struct FlakyRun: Sendable {
             let failed = suite.count { !$0.passed }
             let steady = failed == 0 && !suite.isEmpty
 
+            let runs = grouped ? "runs together" : "suite runs"
             var reasons: [String] = []
             if failed > 0, failed < suite.count {
-                reasons.append("fails \(failed) of \(suite.count) suite runs")
+                reasons.append("fails \(failed) of \(suite.count) \(runs)")
             } else if failed > 0, mine.contains(where: { $0.phase == .reverse && $0.passed }) {
                 // It passed once, early, and never again: a test that passes
                 // the first time only, or one another test spoils.
-                reasons.append("passes on its first run, then fails every suite run — a test run before it leaves state behind")
+                reasons.append("passes on its first run, then fails every one of the \(runs) — a test run before it leaves state behind")
             } else if failed > 0 {
                 reasons.append("fails every time")
             }
@@ -135,6 +173,11 @@ public struct FlakyRun: Sendable {
             }
             if steady, mine.contains(where: { $0.phase == .again && !$0.passed }) {
                 reasons.append("fails when run again on its own, after the suite")
+            }
+            // A run it did not end in is one it neither passed nor failed,
+            // and read as neither it would hide a run that went wrong.
+            if !suite.isEmpty, suite.count < suiteRuns {
+                reasons.append("ended in only \(suite.count) of \(suiteRuns) \(runs)")
             }
             if stoppedIn == test, let stop {
                 reasons.append(stop.hung ? "hung when run on its own" : "took the process down when run on its own")
