@@ -124,7 +124,12 @@ enum OperatorCall {
                    let name = OperatorCall.helperNames[token],
                    OperatorCall.fits(name, lazily: [right]) {
                     taken.insert(site.id)
+                    // The spaces around it kept: beside an operator left as
+                    // written, `…skipped)+ separate` made `+` a postfix
+                    // operator and the line no longer parsed.
                     return OperatorCall.call(name, site, [left, right])
+                        .with(\.leadingTrivia, infix.leadingTrivia)
+                        .with(\.trailingTrivia, infix.trailingTrivia)
                 }
                 return ExprSyntax(infix.with(\.leftOperand, left).with(\.rightOperand, right))
             }
@@ -141,6 +146,8 @@ enum OperatorCall {
                     return OperatorCall.call(
                         OperatorCall.ternaryHelper, site, [condition, ternary.thenExpression, otherwise]
                     )
+                    .with(\.leadingTrivia, ternary.leadingTrivia)
+                    .with(\.trailingTrivia, ternary.trailingTrivia)
                 }
                 return ExprSyntax(ternary.with(\.condition, condition).with(\.elseExpression, otherwise))
             }

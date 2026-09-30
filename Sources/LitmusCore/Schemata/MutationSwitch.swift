@@ -101,10 +101,16 @@ enum MutationSwitch {
     ///
     /// Guarding the statement costs one line. Copying the block to leave the
     /// statement out of one copy would cost the whole block.
+    ///
+    /// A semicolon after the statement stays after the guard. Taken inside
+    /// the braces with it, `lock.lock(); defer { … }` became
+    /// `if !flag { lock.lock(); } defer { … }`, two statements on a line with
+    /// nothing between them, and the file no longer parsed.
     static func statement(
         _ site: MutationSite,
-        around base: CodeBlockItemSyntax
+        around item: CodeBlockItemSyntax
     ) -> CodeBlockItemSyntax {
+        let base = item.with(\.semicolon, nil)
         let negated = PrefixOperatorExprSyntax(
             operator: .prefixOperator("!"),
             expression: flag(site.id).with(\.trailingTrivia, .space)
@@ -124,8 +130,8 @@ enum MutationSwitch {
             )
         )
 
-        return CodeBlockItemSyntax(item: .expr(ExprSyntax(guarded)))
-            .with(\.trailingTrivia, base.trailingTrivia)
+        return CodeBlockItemSyntax(item: .expr(ExprSyntax(guarded)), semicolon: item.semicolon)
+            .with(\.trailingTrivia, item.trailingTrivia)
     }
 
     /// The variable that names the mutant switched on.
