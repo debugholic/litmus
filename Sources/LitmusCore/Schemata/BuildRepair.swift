@@ -176,7 +176,11 @@ public struct BuildRepair: Sendable {
         }
     }
 
-    /// `/path/File.swift:12:5: error: …`
+    /// `/path/File.swift:12:5: error: …`, or `error: /path/File.swift:12:5 …`
+    ///
+    /// The second is how `swift build` writes a syntax error since Swift 6.4,
+    /// with nothing in the first form to go with it; missing it left a
+    /// mutant that broke the parse with nothing to pin it on.
     ///
     /// Colour codes are dropped first: `swift build` colours the word
     /// "error" even when its output goes to a pipe.
@@ -186,17 +190,30 @@ public struct BuildRepair: Sendable {
         )
 
         return plain.split(separator: "\n").compactMap { entry in
-            let parts = entry.split(separator: ":", maxSplits: 4, omittingEmptySubsequences: false)
-            guard
-                parts.count == 5,
-                parts[0].hasSuffix(".swift"),
-                let line = Int(parts[1]),
-                let column = Int(parts[2]),
-                parts[3].trimmingCharacters(in: .whitespaces) == "error"
-            else { return nil }
-
-            return (String(parts[0]), line, column)
+            if entry.hasPrefix("error: ") {
+                return located(entry.dropFirst("error: ".count), endingIn: " ")
+            }
+            guard let location = entry.range(of: ": error:") else { return nil }
+            return located(entry[..<location.lowerBound], endingIn: nil)
         }
+    }
+
+    /// `/path/File.swift:12:5`, then `terminator` or the end of the text.
+    private static func located(
+        _ text: Substring, endingIn terminator: Character?
+    ) -> (path: String, line: Int, column: Int)? {
+        guard let swift = text.range(of: ".swift:") else { return nil }
+        let path = text[..<swift.lowerBound] + ".swift"
+        var rest = text[swift.upperBound...]
+        if let terminator, let end = rest.firstIndex(of: terminator) {
+            rest = rest[..<end]
+        }
+
+        let numbers = rest.split(separator: ":", omittingEmptySubsequences: false)
+        guard numbers.count == 2, let line = Int(numbers[0]), let column = Int(numbers[1]) else {
+            return nil
+        }
+        return (String(path), line, column)
     }
 
     private static func canonical(_ path: String) -> String {
