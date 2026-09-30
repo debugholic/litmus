@@ -25,8 +25,8 @@ public struct SwiftPackage: Sendable, TestHarness {
         self.workingDirectory = workingDirectory
     }
 
-    public func build(lane: String) throws -> BuiltTests {
-        let (log, status) = try run(arguments: ["build", "--build-tests"])
+    public func build(lane: String) async throws -> BuiltTests {
+        let (log, status) = try await run(arguments: ["build", "--build-tests"])
 
         guard status == 0 else {
             throw BuildFailure(log: log)
@@ -42,7 +42,7 @@ public struct SwiftPackage: Sendable, TestHarness {
         switchOn mutantSwitch: String?,
         timeout: TimeInterval?,
         onlyTesting target: String?
-    ) throws -> TestOutput {
+    ) async throws -> TestOutput {
         var environment: [String: String] = [:]
 
         // The test process is a direct child here, so the variable goes
@@ -52,7 +52,7 @@ public struct SwiftPackage: Sendable, TestHarness {
             environment[MutationSwitch.activeVariable] = mutantSwitch
         }
 
-        let output = try Subprocess.run(
+        let output = try await Subprocess.run(
             executable: executable,
             arguments: ["test", "--skip-build"],
             directory: workingDirectory,
@@ -69,16 +69,16 @@ public struct SwiftPackage: Sendable, TestHarness {
     /// behind: that file gives regions, and turning regions back into lines
     /// means redoing arithmetic llvm-cov has already done. A line wrongly
     /// called uncovered drops a mutant that could have been killed.
-    public func coverage(lane: String) throws -> Coverage {
-        let (log, status) = try run(arguments: ["test", "--enable-code-coverage"])
+    public func coverage(lane: String) async throws -> Coverage {
+        let (log, status) = try await run(arguments: ["test", "--enable-code-coverage"])
         guard status == 0 else {
             throw Failure(description: Xcodebuild.suiteFailure(in: log))
         }
 
-        let profile = try codecovDirectory().appendingPathComponent("default.profdata")
-        let bundle = try testBundle()
+        let profile = try await codecovDirectory().appendingPathComponent("default.profdata")
+        let bundle = try await testBundle()
 
-        let (lcov, exportStatus) = try run(
+        let (lcov, exportStatus) = try await run(
             executable: "/usr/bin/xcrun",
             arguments: [
                 "llvm-cov", "export", "-format=lcov",
@@ -96,8 +96,8 @@ public struct SwiftPackage: Sendable, TestHarness {
 
     /// SwiftPM is asked where it put the profile rather than guessed at: the
     /// layout differs between build systems.
-    private func codecovDirectory() throws -> URL {
-        let (path, status) = try run(arguments: ["test", "--show-codecov-path"])
+    private func codecovDirectory() async throws -> URL {
+        let (path, status) = try await run(arguments: ["test", "--show-codecov-path"])
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard status == 0, !trimmed.isEmpty else {
@@ -107,8 +107,8 @@ public struct SwiftPackage: Sendable, TestHarness {
         return URL(fileURLWithPath: trimmed).deletingLastPathComponent()
     }
 
-    private func testBundle() throws -> URL {
-        let (path, status) = try run(arguments: ["build", "--show-bin-path"])
+    private func testBundle() async throws -> URL {
+        let (path, status) = try await run(arguments: ["build", "--show-bin-path"])
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard status == 0, !trimmed.isEmpty else {
@@ -133,8 +133,8 @@ public struct SwiftPackage: Sendable, TestHarness {
         executable: String? = nil,
         arguments: [String],
         environment: [String: String] = [:]
-    ) throws -> (log: String, status: Int32) {
-        let output = try Subprocess.run(
+    ) async throws -> (log: String, status: Int32) {
+        let output = try await Subprocess.run(
             executable: executable ?? self.executable,
             arguments: arguments,
             directory: workingDirectory,

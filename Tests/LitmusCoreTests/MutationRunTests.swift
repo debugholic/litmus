@@ -59,24 +59,30 @@ struct MutationRunTests {
             busyLanes.remove(lane)
         }
 
-        /// Blocks until `count` lanes are busy at once, or gives up.
+        /// Waits until `count` lanes are busy at once, or gives up.
         ///
         /// Sleeping a fixed time instead made this a race: on a loaded machine
         /// three tasks that are meant to overlap simply did not, and the test
         /// failed for a reason that had nothing to do with the scheduler.
         /// Giving up rather than failing here keeps the last, partial batch
         /// from hanging the run.
-        func awaitSaturation(_ count: Int, within seconds: TimeInterval) {
+        ///
+        /// Awaited, as a real lane waits on its tests: blocking here held one
+        /// of the few threads the tasks share, and on a three-core runner the
+        /// third lane never got one to start on.
+        func awaitSaturation(_ count: Int, within seconds: TimeInterval) async {
             let deadline = Date().addingTimeInterval(seconds)
 
             while Date() < deadline {
-                lock.lock()
-                let reached = busyLanes.count >= count
-                lock.unlock()
-
-                if reached { return }
-                usleep(1_000)
+                if busy(count) { return }
+                try? await Task.sleep(nanoseconds: 1_000_000)
             }
+        }
+
+        private func busy(_ count: Int) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return busyLanes.count >= count
         }
     }
 
@@ -100,12 +106,12 @@ struct MutationRunTests {
             switchOn mutantSwitch: String?,
             timeout: TimeInterval?,
             onlyTesting target: String?
-        ) throws -> TestOutput {
+        ) async throws -> TestOutput {
             ledger.begin(lane: lane, mutantSwitch: mutantSwitch)
             defer { ledger.end(lane: lane) }
 
-            if saturate > 0 { ledger.awaitSaturation(saturate, within: 5) }
-            if duration > 0 { Thread.sleep(forTimeInterval: duration) }
+            if saturate > 0 { await ledger.awaitSaturation(saturate, within: 5) }
+            if duration > 0 { try await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000)) }
 
             guard let mutantSwitch else { return baseline }
             return outcomes[mutantSwitch] ?? Self.survives

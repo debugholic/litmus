@@ -169,15 +169,23 @@ public enum AllTestsScheme {
         let file = project.appendingPathComponent("project.pbxproj")
         guard FileManager.default.fileExists(atPath: file.path) else { return [] }
 
-        let json = try Subprocess.run(
-            executable: "/usr/bin/plutil",
-            arguments: ["-convert", "json", "-o", "-", file.path],
-            directory: root
-        )
+        // Once, while the run is set up, so it waits where it stands rather
+        // than making everything above it asynchronous.
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/plutil")
+        process.arguments = ["-convert", "json", "-o", "-", file.path]
+        process.currentDirectoryURL = root
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+
+        try process.run()
+        let json = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
 
         guard
-            json.status == 0,
-            let plist = try? JSONSerialization.jsonObject(with: Data(json.log.utf8)) as? [String: Any],
+            process.terminationStatus == 0,
+            let plist = try? JSONSerialization.jsonObject(with: json) as? [String: Any],
             let objects = plist["objects"] as? [String: [String: Any]]
         else { return [] }
 

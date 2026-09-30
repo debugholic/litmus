@@ -96,7 +96,7 @@ struct BatchTests {
         _ ids: [String],
         with runner: FakeRunner,
         events: inout [Batch.Event]
-    ) throws -> [String: Verdict] {
+    ) async throws -> [String: Verdict] {
         let xcodebuild = Xcodebuild(
             executable: runner.path,
             workingDirectory: runner.directory,
@@ -106,7 +106,7 @@ struct BatchTests {
         let plan = Batch.Plan(built: BuiltTests(artifact: URL(fileURLWithPath: "/tmp/App.xctestrun")))
 
         var collected: [Batch.Event] = []
-        let verdicts = try xcodebuild.runBatch(plan, target: "AppTests", lane: "id=X", ids: ids, timeouts: quick) {
+        let verdicts = try await xcodebuild.runBatch(plan, target: "AppTests", lane: "id=X", ids: ids, timeouts: quick) {
             collected.append($0)
         }
         events = collected
@@ -116,11 +116,11 @@ struct BatchTests {
     // MARK: - one process
 
     @Test("gives every mutant a verdict in one launch")
-    func oneLaunch() throws {
+    func oneLaunch() async throws {
         let runner = try FakeRunner()
         var events: [Batch.Event] = []
 
-        let verdicts = try run(["-", "a", "killed-b", "c"], with: runner, events: &events)
+        let verdicts = try await run(["-", "a", "killed-b", "c"], with: runner, events: &events)
 
         #expect(verdicts == ["-": .survived, "a": .survived, "killed-b": .killed, "c": .survived])
         #expect(runner.launches == 1)
@@ -133,11 +133,11 @@ struct BatchTests {
     /// crashing mutant is killed — the suite did not pass with it on — and
     /// the rest run in a fresh launch, without the baseline again.
     @Test("relaunches past a mutant that crashes the process")
-    func crash() throws {
+    func crash() async throws {
         let runner = try FakeRunner()
         var events: [Batch.Event] = []
 
-        let verdicts = try run(["-", "a", "crash-b", "c", "killed-d"], with: runner, events: &events)
+        let verdicts = try await run(["-", "a", "crash-b", "c", "killed-d"], with: runner, events: &events)
 
         #expect(verdicts == [
             "-": .survived, "a": .survived, "crash-b": .killed, "c": .survived, "killed-d": .killed,
@@ -149,22 +149,22 @@ struct BatchTests {
     /// An infinite loop never ends by itself. It is stopped, counted as a
     /// timeout, and the batch goes on.
     @Test("stops a mutant that hangs, and carries on")
-    func hang() throws {
+    func hang() async throws {
         let runner = try FakeRunner()
         var events: [Batch.Event] = []
 
-        let verdicts = try run(["-", "hang-a", "b"], with: runner, events: &events)
+        let verdicts = try await run(["-", "hang-a", "b"], with: runner, events: &events)
 
         #expect(verdicts == ["-": .survived, "hang-a": .timedOut, "b": .survived])
         #expect(runner.launches == 2)
     }
 
     @Test("survives two crashes in a row")
-    func crashes() throws {
+    func crashes() async throws {
         let runner = try FakeRunner()
         var events: [Batch.Event] = []
 
-        let verdicts = try run(["-", "crash-a", "crash-b", "c"], with: runner, events: &events)
+        let verdicts = try await run(["-", "crash-a", "crash-b", "c"], with: runner, events: &events)
 
         #expect(verdicts == ["-": .survived, "crash-a": .killed, "crash-b": .killed, "c": .survived])
         #expect(runner.launches == 3)
@@ -173,11 +173,11 @@ struct BatchTests {
     /// Measured against a failing suite every mutant looks killed, so a red
     /// baseline ends the batch rather than scoring anything.
     @Test("stops at a red baseline")
-    func redBaseline() throws {
+    func redBaseline() async throws {
         let runner = try FakeRunner()
         var events: [Batch.Event] = []
 
-        let verdicts = try run(["-", "redbaseline", "b"], with: runner, events: &events)
+        let verdicts = try await run(["-", "redbaseline", "b"], with: runner, events: &events)
 
         #expect(verdicts == ["-": .killed])
         #expect(runner.launches == 1)
@@ -185,12 +185,12 @@ struct BatchTests {
 
     /// One run ended half an hour in on a spawn launchd refused once.
     @Test("launches again when the runner did not come up, and carries on")
-    func relaunchAfterFailedLaunch() throws {
+    func relaunchAfterFailedLaunch() async throws {
         Xcodebuild.relaunchDelay = 0
         let runner = try FakeRunner(failingLaunches: 2)
         var events: [Batch.Event] = []
 
-        let verdicts = try run(["-", "a", "killed-b"], with: runner, events: &events)
+        let verdicts = try await run(["-", "a", "killed-b"], with: runner, events: &events)
 
         #expect(runner.launches == 3)
         #expect(verdicts["a"] == .survived)
@@ -198,24 +198,24 @@ struct BatchTests {
     }
 
     @Test("stops when the runner keeps not coming up")
-    func relaunchGivesUp() throws {
+    func relaunchGivesUp() async throws {
         Xcodebuild.relaunchDelay = 0
         let runner = try FakeRunner(failingLaunches: 10)
         var events: [Batch.Event] = []
 
-        #expect(throws: Xcodebuild.Failure.self) {
-            _ = try run(["-", "a"], with: runner, events: &events)
+        await #expect(throws: Xcodebuild.Failure.self) {
+            _ = try await run(["-", "a"], with: runner, events: &events)
         }
         #expect(runner.launches == Xcodebuild.launchAttempts)
     }
 
     @Test("gives up when the runner never starts")
-    func neverStarts() throws {
+    func neverStarts() async throws {
         let runner = try FakeRunner(neverStarts: true)
         var events: [Batch.Event] = []
 
-        #expect(throws: Xcodebuild.Failure.self) {
-            _ = try run(["-", "a"], with: runner, events: &events)
+        await #expect(throws: Xcodebuild.Failure.self) {
+            _ = try await run(["-", "a"], with: runner, events: &events)
         }
     }
 
@@ -275,11 +275,11 @@ struct BatchTests {
     // MARK: - probing
 
     @Test("asks the driver to probe, and reads a mutant no test reaches")
-    func probes() throws {
+    func probes() async throws {
         let runner = try FakeRunner()
         var events: [Batch.Event] = []
 
-        let verdicts = try run(["-", "a", "uncovered-b"], with: runner, events: &events)
+        let verdicts = try await run(["-", "a", "uncovered-b"], with: runner, events: &events)
 
         #expect(verdicts == ["-": .survived, "a": .survived, "uncovered-b": .noCoverage])
         #expect(runner.probes.count == 1)
@@ -291,11 +291,11 @@ struct BatchTests {
     /// A probe that dies is not a mutant's doing; nothing should be scored
     /// for it, and the batch carries on the old way.
     @Test("carries on without probing when the probe crashes")
-    func probeCrash() throws {
+    func probeCrash() async throws {
         let runner = try FakeRunner()
         var events: [Batch.Event] = []
 
-        let verdicts = try run(["-", "dyingprobe-a", "killed-b"], with: runner, events: &events)
+        let verdicts = try await run(["-", "dyingprobe-a", "killed-b"], with: runner, events: &events)
 
         #expect(verdicts == ["-": .survived, "dyingprobe-a": .survived, "killed-b": .killed])
         #expect(verdicts[Batch.probe] == nil)

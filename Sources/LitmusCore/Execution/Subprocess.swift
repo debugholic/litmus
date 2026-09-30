@@ -9,6 +9,10 @@ public enum Subprocess {
         let timedOut: Bool
     }
 
+    /// Awaited rather than waited on. A lane that held a thread while its
+    /// tests ran took one of the few the tasks share, and on a runner with
+    /// three cores the third lane waited for a thread rather than a
+    /// simulator.
     static func run(
         executable: String,
         arguments: [String],
@@ -16,7 +20,7 @@ public enum Subprocess {
         environment: [String: String] = [:],
         timeout: TimeInterval? = nil,
         onLine: (@Sendable (String) -> Void)? = nil
-    ) throws -> Output {
+    ) async throws -> Output {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -24,10 +28,10 @@ public enum Subprocess {
         process.environment = ProcessInfo.processInfo.environment
             .merging(environment) { _, new in new }
 
-        // Drained on its own thread: a full pipe buffer would otherwise stall
-        // the child, and a test log easily exceeds it.
+        // Drained as it comes: a full pipe buffer would otherwise stall the
+        // child, and a test log easily exceeds it.
         let log = Collected(onLine: onLine)
-        let drained = DispatchSemaphore(value: 0)
+        let drained = Latch()
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe
@@ -35,36 +39,36 @@ public enum Subprocess {
             let chunk = handle.availableData
             if chunk.isEmpty {
                 handle.readabilityHandler = nil
-                drained.signal()
+                drained.open()
             } else {
                 log.append(chunk)
             }
         }
 
+        let exited = Latch()
+        process.terminationHandler = { _ in exited.open() }
+
         try process.run()
         track(process)
         defer { untrack(process) }
 
-        let deadline = timeout.map { Date().addingTimeInterval($0) }
         var timedOut = false
-
-        if deadline == nil {
-            process.waitUntilExit()
-        } else {
-            while process.isRunning {
-                if let deadline, Date() > deadline {
-                    timedOut = true
-                    stop(process)
-                    break
-                }
-                Thread.sleep(forTimeInterval: 0.2)
+        if await !exited.wait(timeout: timeout) {
+            // A lane given up on: what it started goes with it.
+            if Task.isCancelled {
+                await stop(process, grace: 0)
+                throw CancellationError()
             }
-            process.waitUntilExit()
+            timedOut = true
+            await stop(process)
+            await exited.wait()
+            // Cancelled while it was being stopped: there is no status yet.
+            guard exited.isOpen else { throw CancellationError() }
         }
 
         // Something the tool started can outlive it and keep the pipe open,
         // so the end of the log is waited for, but not forever.
-        if drained.wait(timeout: .now() + 10) == .timedOut {
+        if await !drained.wait(timeout: 10) {
             pipe.fileHandleForReading.readabilityHandler = nil
         }
 
@@ -110,7 +114,7 @@ public enum Subprocess {
         lock.unlock()
 
         for process in processes where process.isRunning {
-            stop(process, grace: grace)
+            stopNow(process, grace: grace)
         }
     }
 
@@ -147,16 +151,42 @@ public enum Subprocess {
     /// `swift test` runs the tests in a helper of its own. Stopping only the
     /// tool left that helper spinning in the mutant's infinite loop long
     /// after the run had moved on.
-    static func stop(_ process: Process, grace: TimeInterval = 30) {
-        let tree = descendants(of: process.processIdentifier)
-        process.terminate()
-        for pid in tree { kill(pid, SIGTERM) }
+    static func stop(_ process: Process, grace: TimeInterval = 30) async {
+        let tree = ask(process)
 
         let deadline = Date().addingTimeInterval(grace)
-        while process.isRunning || tree.contains(where: isAlive), Date() < deadline {
+        while alive(process, tree), Date() < deadline {
+            // Cancelled, it insists at once.
+            do { try await Task.sleep(nanoseconds: 500_000_000) } catch { break }
+        }
+
+        insist(process, tree)
+    }
+
+    /// The same, for an interrupted run, which has no task to wait in.
+    private static func stopNow(_ process: Process, grace: TimeInterval) {
+        let tree = ask(process)
+
+        let deadline = Date().addingTimeInterval(grace)
+        while alive(process, tree), Date() < deadline {
             Thread.sleep(forTimeInterval: 0.5)
         }
 
+        insist(process, tree)
+    }
+
+    private static func ask(_ process: Process) -> [pid_t] {
+        let tree = descendants(of: process.processIdentifier)
+        process.terminate()
+        for pid in tree { kill(pid, SIGTERM) }
+        return tree
+    }
+
+    private static func alive(_ process: Process, _ tree: [pid_t]) -> Bool {
+        process.isRunning || tree.contains(where: isAlive)
+    }
+
+    private static func insist(_ process: Process, _ tree: [pid_t]) {
         if process.isRunning {
             kill(process.processIdentifier, SIGKILL)
         }
@@ -221,6 +251,67 @@ public enum Subprocess {
             lock.lock()
             defer { lock.unlock() }
             return String(decoding: data, as: UTF8.self)
+        }
+    }
+
+    /// Opens once, and is awaited without holding a thread.
+    final class Latch: @unchecked Sendable {
+        private let lock = NSLock()
+        private var opened = false
+        private var waiting: [UUID: CheckedContinuation<Void, Never>] = [:]
+
+        var isOpen: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return opened
+        }
+
+        func open() {
+            lock.lock()
+            opened = true
+            let resumed = waiting.values
+            waiting = [:]
+            lock.unlock()
+
+            resumed.forEach { $0.resume() }
+        }
+
+        /// Returns once it opens, or once the task is cancelled.
+        func wait() async {
+            let id = UUID()
+            await withTaskCancellationHandler {
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    lock.lock()
+                    if opened || Task.isCancelled {
+                        lock.unlock()
+                        continuation.resume()
+                    } else {
+                        waiting[id] = continuation
+                        lock.unlock()
+                    }
+                }
+            } onCancel: {
+                lock.lock()
+                let continuation = waiting.removeValue(forKey: id)
+                lock.unlock()
+                continuation?.resume()
+            }
+        }
+
+        /// Whether it opened within `seconds`. Nil waits as long as it takes.
+        func wait(timeout seconds: TimeInterval?) async -> Bool {
+            guard let seconds else {
+                await wait()
+                return isOpen
+            }
+
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask { await self.wait() }
+                group.addTask { try? await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000)) }
+                await group.next()
+                group.cancelAll()
+            }
+            return isOpen
         }
     }
 }

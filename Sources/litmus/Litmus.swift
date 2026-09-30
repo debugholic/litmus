@@ -64,7 +64,7 @@ struct Run: AsyncParsableCommand {
         let mutants: [Mutant]
 
         do {
-            (working, mutants) = try prepared(project)
+            (working, mutants) = try await prepared(project)
         } catch let nothing as NothingToMutate {
             // Not a failure and not a misuse: printing usage here would say the
             // command was typed wrong, and exiting non-zero would turn a
@@ -164,7 +164,7 @@ struct Run: AsyncParsableCommand {
     /// Injecting is part of a run, not a step before it. Passing `--plan` says
     /// the work was already done — by `litmus inject`, for a copy worth looking
     /// at — and this runs that instead.
-    private func prepared(_ project: URL) throws -> (working: URL, mutants: [Mutant]) {
+    private func prepared(_ project: URL) async throws -> (working: URL, mutants: [Mutant]) {
         if let plan {
             Interruption.install()
             try RunLock.acquire(for: project)
@@ -173,7 +173,7 @@ struct Run: AsyncParsableCommand {
 
         let workingCopy = WorkingCopy.location(for: project)
 
-        let result = try Injection(
+        let result = try await Injection(
             project: project,
             workingCopy: workingCopy,
             scope: scope,

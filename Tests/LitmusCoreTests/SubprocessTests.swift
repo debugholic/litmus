@@ -8,8 +8,8 @@ struct SubprocessTests {
     private let directory = URL(fileURLWithPath: NSTemporaryDirectory())
 
     @Test("keeps the whole log of a tool that finishes")
-    func finishes() throws {
-        let output = try Subprocess.run(
+    func finishes() async throws {
+        let output = try await Subprocess.run(
             executable: "/bin/sh",
             arguments: ["-c", "echo one; echo two >&2; exit 3"],
             directory: directory,
@@ -24,10 +24,10 @@ struct SubprocessTests {
 
     /// A mutant that turns a loop infinite never finishes on its own.
     @Test("stops a tool that runs past its time")
-    func stopsAHang() throws {
+    func stopsAHang() async throws {
         let started = Date()
 
-        let output = try Subprocess.run(
+        let output = try await Subprocess.run(
             executable: "/bin/sh",
             arguments: ["-c", "echo started; exec sleep 60"],
             directory: directory,
@@ -42,13 +42,13 @@ struct SubprocessTests {
     }
 
     @Test("stops what the tool started, not just the tool")
-    func stopsChildren() throws {
+    func stopsChildren() async throws {
         let marker = FileManager.default.temporaryDirectory
             .appendingPathComponent("litmus-child-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: marker) }
 
         // The child writes its pid and outlives a parent that only waits.
-        _ = try Subprocess.run(
+        _ = try await Subprocess.run(
             executable: "/bin/sh",
             arguments: ["-c", "sh -c 'echo $$ > \(marker.path); exec sleep 60' & wait"],
             directory: directory,
@@ -91,7 +91,7 @@ struct SubprocessTests {
         let marker = "litmus-stop-all-\(UUID().uuidString)"
         let started = Date()
         let task = Task.detached {
-            try Subprocess.run(
+            try await Subprocess.run(
                 executable: "/bin/sh",
                 arguments: ["-c", "sleep 60; true", marker],
                 directory: URL(fileURLWithPath: "/tmp")
@@ -111,5 +111,54 @@ struct SubprocessTests {
         // runner took 21 seconds to get there, so the bound is loose.
         #expect(output.status != 0)
         #expect(Date().timeIntervalSince(started) < 50)
+    }
+
+    /// A lane whose sibling failed is cancelled. The tool it was waiting on
+    /// goes with it, rather than running on for the rest of its time.
+    @Test("stops the tool when the task waiting on it is cancelled")
+    func stopsWhenCancelled() async throws {
+        let marker = "litmus-cancel-\(UUID().uuidString)"
+        let started = Date()
+        let task = Task {
+            try await Subprocess.run(
+                executable: "/bin/sh",
+                arguments: ["-c", "sleep 60; true", marker],
+                directory: directory,
+                timeout: 120
+            )
+        }
+        let mine: (Process) -> Bool = { $0.arguments?.contains(marker) == true }
+        while !Subprocess.isRunning(matching: mine), Date().timeIntervalSince(started) < 30 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+
+        task.cancel()
+
+        await #expect(throws: CancellationError.self) { try await task.value }
+        #expect(!Subprocess.isRunning(matching: mine))
+        #expect(Date().timeIntervalSince(started) < 50)
+    }
+
+    /// Waiting on a tool holds no thread, so more of them than there are
+    /// cores all run at once.
+    @Test("runs more tools at once than the machine has cores")
+    func holdsNoThread() async throws {
+        let count = ProcessInfo.processInfo.activeProcessorCount * 2 + 2
+        let started = Date()
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for _ in 0..<count {
+                group.addTask {
+                    _ = try await Subprocess.run(
+                        executable: "/bin/sleep", arguments: ["2"], directory: directory
+                    )
+                }
+            }
+            try await group.waitForAll()
+        }
+
+        // One after another, or a core's worth at a time, would take three
+        // rounds of two seconds at least.
+        #expect(Date().timeIntervalSince(started) < 5.5)
     }
 }

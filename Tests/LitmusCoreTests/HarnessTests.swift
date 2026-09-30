@@ -52,11 +52,11 @@ struct HarnessTests {
     // MARK: - swift package
 
     @Test("runs the package's tests without building them again")
-    func swiftPackageSkipsBuild() throws {
+    func swiftPackageSkipsBuild() async throws {
         let tool = try FakeTool(printing: "Test run with 3 tests in 1 suites passed after 0.1 seconds.")
         let package = SwiftPackage(executable: tool.path, workingDirectory: workingDirectory)
 
-        let output = try package.test(BuiltTests(), lane: "worker 1", switchOn: nil)
+        let output = try await package.test(BuiltTests(), lane: "worker 1", switchOn: nil)
 
         #expect(output.log.contains("ARGS: test --skip-build"))
         #expect(output.status == 0)
@@ -65,11 +65,11 @@ struct HarnessTests {
     /// There is no runner in between here, so the variable goes straight onto
     /// the test process rather than through a `TEST_RUNNER_` prefix.
     @Test("puts the mutant's variable on the test process itself")
-    func swiftPackageEnvironment() throws {
+    func swiftPackageEnvironment() async throws {
         let tool = try FakeTool()
         let package = SwiftPackage(executable: tool.path, workingDirectory: workingDirectory)
 
-        let output = try package.test(
+        let output = try await package.test(
             BuiltTests(),
             lane: "worker 1",
             switchOn: "Sample_ChangeLogicalConnector_1_2_3"
@@ -80,43 +80,45 @@ struct HarnessTests {
     }
 
     @Test("sets no variable for the baseline")
-    func swiftPackageBaseline() throws {
+    func swiftPackageBaseline() async throws {
         let tool = try FakeTool()
         let package = SwiftPackage(executable: tool.path, workingDirectory: workingDirectory)
 
-        let output = try package.test(BuiltTests(), lane: "worker 1", switchOn: nil)
+        let output = try await package.test(BuiltTests(), lane: "worker 1", switchOn: nil)
 
         #expect(output.log.contains("ACTIVE: none"))
     }
 
     @Test("carries a bad exit status back rather than swallowing it")
-    func swiftPackageStatus() throws {
+    func swiftPackageStatus() async throws {
         let tool = try FakeTool(exiting: 1)
         let package = SwiftPackage(executable: tool.path, workingDirectory: workingDirectory)
 
-        #expect(try package.test(BuiltTests(), lane: "worker 1", switchOn: nil).status == 1)
+        let status = try await package.test(BuiltTests(), lane: "worker 1", switchOn: nil).status
+        #expect(status == 1)
     }
 
     /// A build that failed has to stop the run. Carrying on would measure
     /// mutants against a binary that was never rebuilt.
     @Test("throws when the build fails")
-    func swiftPackageBuildFailure() throws {
+    func swiftPackageBuildFailure() async throws {
         let tool = try FakeTool(printing: "error: build failed", exiting: 1)
         let package = SwiftPackage(executable: tool.path, workingDirectory: workingDirectory)
 
-        #expect(throws: BuildFailure.self) {
-            try package.build(lane: "worker 1")
+        await #expect(throws: BuildFailure.self) {
+            try await package.build(lane: "worker 1")
         }
     }
 
     @Test("builds the tests before running them")
-    func swiftPackageBuild() throws {
+    func swiftPackageBuild() async throws {
         let tool = try FakeTool()
         let package = SwiftPackage(executable: tool.path, workingDirectory: workingDirectory)
 
-        _ = try package.build(lane: "worker 1")
+        _ = try await package.build(lane: "worker 1")
         // Nothing to carry: --skip-build finds the products by itself.
-        #expect(try package.build(lane: "worker 1").artifact == nil)
+        let rebuilt = try await package.build(lane: "worker 1")
+        #expect(rebuilt.artifact == nil)
     }
 
     // MARK: - xcodebuild
@@ -125,7 +127,7 @@ struct HarnessTests {
     /// variable into the test runner process; the prefix is stripped on the way
     /// in. Setting the bare name would never reach the simulator.
     @Test("passes the mutant's variable with the TEST_RUNNER_ prefix")
-    func xcodebuildEnvironment() throws {
+    func xcodebuildEnvironment() async throws {
         let tool = try FakeTool()
         let xcodebuild = Xcodebuild(
             executable: tool.path,
@@ -134,7 +136,7 @@ struct HarnessTests {
             derivedDataPath: workingDirectory
         )
 
-        let output = try xcodebuild.testWithoutBuilding(
+        let output = try await xcodebuild.testWithoutBuilding(
             xctestrun: URL(fileURLWithPath: "/tmp/App.xctestrun"),
             destination: "platform=iOS Simulator,id=UDID",
             switchOn: "Sample_ChangeLogicalConnector_1_2_3"
@@ -147,7 +149,7 @@ struct HarnessTests {
     }
 
     @Test("runs the built tests against the xctestrun it was given")
-    func xcodebuildArguments() throws {
+    func xcodebuildArguments() async throws {
         let tool = try FakeTool(printing: "** TEST SUCCEEDED **")
         let xcodebuild = Xcodebuild(
             executable: tool.path,
@@ -156,7 +158,7 @@ struct HarnessTests {
             derivedDataPath: workingDirectory
         )
 
-        let output = try xcodebuild.testWithoutBuilding(
+        let output = try await xcodebuild.testWithoutBuilding(
             xctestrun: URL(fileURLWithPath: "/tmp/App.xctestrun"),
             destination: "platform=iOS Simulator,id=UDID"
         )
@@ -169,7 +171,7 @@ struct HarnessTests {
     /// Without these, xcodebuild made a DerivedData folder per run: 427 of
     /// them, 1.3 GB, after one night.
     @Test("keeps each run's data in the lane's own folder")
-    func xcodebuildDerivedData() throws {
+    func xcodebuildDerivedData() async throws {
         let tool = try FakeTool()
         let xcodebuild = Xcodebuild(
             executable: tool.path,
@@ -178,7 +180,7 @@ struct HarnessTests {
             derivedDataPath: URL(fileURLWithPath: "/tmp/dd")
         )
 
-        let output = try xcodebuild.testWithoutBuilding(
+        let output = try await xcodebuild.testWithoutBuilding(
             xctestrun: URL(fileURLWithPath: "/tmp/App.xctestrun"),
             destination: "platform=iOS Simulator,id=ABC"
         )
@@ -188,7 +190,7 @@ struct HarnessTests {
     }
 
     @Test("narrows the run when asked to")
-    func xcodebuildOnlyTesting() throws {
+    func xcodebuildOnlyTesting() async throws {
         let tool = try FakeTool()
         let xcodebuild = Xcodebuild(
             executable: tool.path,
@@ -197,7 +199,7 @@ struct HarnessTests {
             derivedDataPath: workingDirectory
         )
 
-        let output = try xcodebuild.testWithoutBuilding(
+        let output = try await xcodebuild.testWithoutBuilding(
             xctestrun: URL(fileURLWithPath: "/tmp/App.xctestrun"),
             destination: "id=UDID",
             onlyTesting: ["AppTests/BookmarkTests"]
@@ -208,7 +210,7 @@ struct HarnessTests {
 
     /// The build writes an `.xctestrun`, and there is nothing to run without it.
     @Test("reports when the build produced no xctestrun")
-    func xcodebuildMissingXctestrun() throws {
+    func xcodebuildMissingXctestrun() async throws {
         let tool = try FakeTool()
         let empty = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("litmus-dd-\(UUID().uuidString)")
@@ -225,26 +227,27 @@ struct HarnessTests {
             derivedDataPath: empty
         )
 
-        #expect(throws: Xcodebuild.Failure.self) {
-            try xcodebuild.build(lane: "id=UDID")
+        await #expect(throws: Xcodebuild.Failure.self) {
+            try await xcodebuild.build(lane: "id=UDID")
         }
     }
 
     /// Without a profile the xccov report is all there is; a profile that
     /// cannot be read must not stop the coverage run.
     @Test("reads no profile coverage when the run left no profile")
-    func noProfile() throws {
+    func noProfile() async throws {
         let derived = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("litmus-dd-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: derived.appendingPathComponent("Build/Products"), withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: derived) }
 
         let xcodebuild = Xcodebuild(workingDirectory: workingDirectory, scheme: "MyApp", derivedDataPath: derived)
 
-        #expect(xcodebuild.profileCoverage() == nil)
+        let measured = await xcodebuild.profileCoverage()
+        #expect(measured == nil)
     }
 
     @Test("finds the xctestrun the build left behind")
-    func xcodebuildFindsXctestrun() throws {
+    func xcodebuildFindsXctestrun() async throws {
         let tool = try FakeTool()
         let derived = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("litmus-dd-\(UUID().uuidString)")
@@ -267,14 +270,14 @@ struct HarnessTests {
             derivedDataPath: derived
         )
 
-        let built = try xcodebuild.build(lane: "id=UDID")
+        let built = try await xcodebuild.build(lane: "id=UDID")
 
         #expect(built.artifact?.lastPathComponent == "App_iphonesimulator.xctestrun")
     }
 
     /// One build should name every broken target, not stop at the first.
     @Test("keeps building after an error, for the build and the coverage run")
-    func xcodebuildContinuesAfterErrors() throws {
+    func xcodebuildContinuesAfterErrors() async throws {
         let tool = try FakeTool(printing: "error: broken", exiting: 65)
         let xcodebuild = Xcodebuild(
             executable: tool.path,
@@ -284,15 +287,15 @@ struct HarnessTests {
                 .appendingPathComponent("litmus-dd-\(UUID().uuidString)")
         )
 
-        let build = #expect(throws: BuildFailure.self) { try xcodebuild.build(lane: "id=UDID") }
-        let coverage = #expect(throws: SuiteFailure.self) { try xcodebuild.coverage(lane: "id=UDID") }
+        let build = await #expect(throws: BuildFailure.self) { try await xcodebuild.build(lane: "id=UDID") }
+        let coverage = await #expect(throws: SuiteFailure.self) { try await xcodebuild.coverage(lane: "id=UDID") }
 
         #expect(build?.log.contains("-IDEBuildingContinueBuildingAfterErrors=YES") == true)
         #expect(coverage?.log.contains("-IDEBuildingContinueBuildingAfterErrors=YES") == true)
     }
 
     @Test("refuses to run without a build")
-    func xcodebuildNeedsBuild() throws {
+    func xcodebuildNeedsBuild() async throws {
         let tool = try FakeTool()
         let xcodebuild = Xcodebuild(
             executable: tool.path,
@@ -301,8 +304,8 @@ struct HarnessTests {
             derivedDataPath: workingDirectory
         )
 
-        #expect(throws: Xcodebuild.Failure.self) {
-            try xcodebuild.test(BuiltTests(), lane: "id=UDID", switchOn: nil)
+        await #expect(throws: Xcodebuild.Failure.self) {
+            try await xcodebuild.test(BuiltTests(), lane: "id=UDID", switchOn: nil)
         }
     }
 }

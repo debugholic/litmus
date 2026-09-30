@@ -5,13 +5,13 @@ extension Xcodebuild: BatchingHarness {
         _ built: BuiltTests,
         targets: [TestedScope.TestTarget],
         lane: String
-    ) throws -> Batch.Plan {
+    ) async throws -> Batch.Plan {
         for target in targets {
             try Batch.appendDriver(to: target)
         }
 
         // Incremental: only the test targets changed.
-        return Batch.Plan(built: try build(lane: lane))
+        return Batch.Plan(built: try await build(lane: lane))
     }
 
     public func runBatch(
@@ -21,7 +21,7 @@ extension Xcodebuild: BatchingHarness {
         ids: [String],
         timeouts: Batch.Timeouts,
         onEvent: (Batch.Event) -> Void
-    ) throws -> [String: Verdict] {
+    ) async throws -> [String: Verdict] {
         guard let xctestrun = plan.built.artifact else {
             throw Failure(description: "no .xctestrun to run")
         }
@@ -44,7 +44,7 @@ extension Xcodebuild: BatchingHarness {
         var stalls = 0
 
         while !remaining.isEmpty {
-            let outcome = try launch(
+            let outcome = try await launch(
                 target: target, xctestrun: xctestrun, lane: lane, ids: remaining,
                 probeDirectory: probeDirectory, timeouts: &timeouts, onEvent: onEvent
             )
@@ -86,7 +86,7 @@ extension Xcodebuild: BatchingHarness {
             guard stalls < Self.launchAttempts else {
                 throw Failure(description: "the batch made no progress:\n\n\(Self.errorLines(in: outcome.log))")
             }
-            Thread.sleep(forTimeInterval: Self.relaunchDelay)
+            try await Task.sleep(nanoseconds: UInt64(Self.relaunchDelay * 1_000_000_000))
         }
 
         return verdicts
@@ -112,7 +112,7 @@ extension Xcodebuild: BatchingHarness {
         probeDirectory: URL?,
         timeouts: inout Batch.Timeouts,
         onEvent: (Batch.Event) -> Void
-    ) throws -> Launch {
+    ) async throws -> Launch {
         let laneData = derivedDataPath
             .appendingPathComponent("lanes")
             .appendingPathComponent(Self.folderName(for: lane))
@@ -160,6 +160,9 @@ extension Xcodebuild: BatchingHarness {
         }
         defer { pipe.fileHandleForReading.readabilityHandler = nil }
 
+        let exited = Subprocess.Latch()
+        process.terminationHandler = { _ in exited.open() }
+
         try process.run()
         Subprocess.track(process)
         defer { Subprocess.untrack(process) }
@@ -206,12 +209,12 @@ extension Xcodebuild: BatchingHarness {
                     ? timeouts.baseline
                     : limits[running.id] ?? timeouts.mutant
                 if Date().timeIntervalSince(running.started) > limit {
-                    Subprocess.stop(process)
+                    await Subprocess.stop(process)
                     stopped = true
                     break
                 }
             } else if !reported, Date().timeIntervalSince(launched) > timeouts.launch {
-                Subprocess.stop(process)
+                await Subprocess.stop(process)
                 throw Failure(description: """
                 the test runner never started:
 
@@ -219,10 +222,18 @@ extension Xcodebuild: BatchingHarness {
                 """)
             }
 
-            Thread.sleep(forTimeInterval: 0.5)
+            // Slept as a task, so the lane holds no thread between reads.
+            // Cancelled, the runner goes with the lane.
+            do {
+                try await Task.sleep(nanoseconds: 500_000_000)
+            } catch {
+                await Subprocess.stop(process, grace: 0)
+                throw error
+            }
         }
 
-        process.waitUntilExit()
+        await exited.wait()
+        guard exited.isOpen else { throw CancellationError() }
         consume()
 
         return Launch(

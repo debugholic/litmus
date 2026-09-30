@@ -35,9 +35,9 @@ public struct Xcodebuild: Sendable, TestHarness {
         self.onActivity = onActivity
     }
 
-    public func build(lane: String) throws -> BuiltTests {
+    public func build(lane: String) async throws -> BuiltTests {
         BuiltTests(
-            artifact: try buildForTesting(
+            artifact: try await buildForTesting(
                 scheme: scheme,
                 destination: lane,
                 derivedDataPath: derivedDataPath
@@ -51,12 +51,12 @@ public struct Xcodebuild: Sendable, TestHarness {
         switchOn mutantSwitch: String?,
         timeout: TimeInterval?,
         onlyTesting target: String?
-    ) throws -> TestOutput {
+    ) async throws -> TestOutput {
         guard let xctestrun = built.artifact else {
             throw Failure(description: "no .xctestrun to run")
         }
 
-        return try testWithoutBuilding(
+        return try await testWithoutBuilding(
             xctestrun: xctestrun,
             destination: lane,
             switchOn: mutantSwitch,
@@ -73,8 +73,8 @@ public struct Xcodebuild: Sendable, TestHarness {
         scheme: String,
         destination: String,
         derivedDataPath: URL
-    ) throws -> URL {
-        let (log, status) = try run(arguments: [
+    ) async throws -> URL {
+        let (log, status) = try await run(arguments: [
             "build-for-testing",
             "-scheme", scheme,
             "-destination", destination,
@@ -116,7 +116,7 @@ public struct Xcodebuild: Sendable, TestHarness {
         switchOn mutantSwitch: String? = nil,
         onlyTesting: [String] = [],
         timeout: TimeInterval? = nil
-    ) throws -> TestOutput {
+    ) async throws -> TestOutput {
         // Without -derivedDataPath, every run gets a DerivedData folder of its
         // own under ~/Library: one overnight run left 427 of them, 1.3 GB.
         // One folder per lane instead, so concurrent lanes do not share one.
@@ -145,7 +145,7 @@ public struct Xcodebuild: Sendable, TestHarness {
             environment["TEST_RUNNER_\(MutationSwitch.activeVariable)"] = mutantSwitch
         }
 
-        let output = try Subprocess.run(
+        let output = try await Subprocess.run(
             executable: executable,
             arguments: arguments,
             directory: workingDirectory,
@@ -162,12 +162,12 @@ public struct Xcodebuild: Sendable, TestHarness {
     /// but only one file per invocation, so the line-level report costs a
     /// process per source file. Whole files with nothing running in them are
     /// where most of the waste is, and they come out of a single call.
-    public func coverage(lane: String) throws -> Coverage {
+    public func coverage(lane: String) async throws -> Coverage {
         let bundle = coverageBundle
         // xcodebuild refuses to write over one that is already there.
         try? FileManager.default.removeItem(at: bundle)
 
-        let (log, status) = try run(arguments: [
+        let (log, status) = try await run(arguments: [
             "test",
             "-scheme", scheme,
             "-destination", lane,
@@ -181,7 +181,7 @@ public struct Xcodebuild: Sendable, TestHarness {
             throw SuiteFailure(log: log)
         }
 
-        return try lastCoverage()
+        return try await lastCoverage()
     }
 
     /// Keeps building the targets that can be built after one fails, so a
@@ -197,19 +197,19 @@ public struct Xcodebuild: Sendable, TestHarness {
     /// A run whose only fault was failing tests still measured everything it
     /// ran. Reading it saves running the whole suite again once the failing
     /// targets are out.
-    public func lastCoverage() throws -> Coverage {
+    public func lastCoverage() async throws -> Coverage {
         // Line by line from the profile, when it can be read: xccov lists a
         // Swift package's library, linked into its test bundle, as a target
         // with no files, so nothing in it was ever filtered out.
-        if let lines = profileCoverage(), !lines.isEmpty {
+        if let lines = await profileCoverage(), !lines.isEmpty {
             return lines
         }
-        return try xccovCoverage()
+        return try await xccovCoverage()
     }
 
     /// `llvm-cov export` over every test bundle the build made, with the
     /// profile the run wrote. Nil when either is missing or llvm-cov fails.
-    func profileCoverage() -> Coverage? {
+    func profileCoverage() async -> Coverage? {
         let root = derivedDataPath.appendingPathComponent("Build")
         let manager = FileManager.default
 
@@ -245,15 +245,15 @@ public struct Xcodebuild: Sendable, TestHarness {
         var arguments = ["llvm-cov", "export", "-format=lcov", "-arch", arch, "-instr-profile", profile.path, first.path]
         for other in binaries.dropFirst() { arguments += ["-object", other.path] }
 
-        guard let (lcov, status) = try? run(executable: "/usr/bin/xcrun", arguments: arguments), status == 0 else {
+        guard let (lcov, status) = try? await run(executable: "/usr/bin/xcrun", arguments: arguments), status == 0 else {
             return nil
         }
         return Lcov.parse(lcov)
     }
 
-    private func xccovCoverage() throws -> Coverage {
+    private func xccovCoverage() async throws -> Coverage {
         let bundle = coverageBundle
-        let (report, reportStatus) = try run(
+        let (report, reportStatus) = try await run(
             executable: "/usr/bin/xcrun",
             arguments: ["xccov", "view", "--report", "--json", bundle.path]
         )
@@ -368,10 +368,10 @@ public struct Xcodebuild: Sendable, TestHarness {
         executable: String? = nil,
         arguments: [String],
         environment: [String: String] = [:]
-    ) throws -> (log: String, status: Int32) {
+    ) async throws -> (log: String, status: Int32) {
         let activity = XcodebuildActivity()
         let report = onActivity
-        let output = try Subprocess.run(
+        let output = try await Subprocess.run(
             executable: executable ?? self.executable,
             arguments: arguments,
             directory: workingDirectory,

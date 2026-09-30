@@ -237,7 +237,7 @@ public struct MutationRun: Sendable {
 
         progress(.building)
         var mutants = mutants
-        let (built, unviable) = try build(&mutants)
+        let (built, unviable) = try await build(&mutants)
 
         // A mutant in code these tests never look at survives whatever it
         // does, and each one costs a full run to prove it.
@@ -272,14 +272,14 @@ public struct MutationRun: Sendable {
     /// Bounded, because each round is a build: a repair that keeps finding
     /// something new is not converging, and the log says why better than
     /// another attempt would.
-    private func build(_ mutants: inout [Mutant]) throws -> (BuiltTests, [Mutant]) {
+    private func build(_ mutants: inout [Mutant]) async throws -> (BuiltTests, [Mutant]) {
         var unviable: [Mutant] = []
         var rounds = 0
         var moves = 0
 
         while rounds < 5 {
             do {
-                return (try configuration.harness.build(lane: configuration.lanes[0]), unviable)
+                return (try await configuration.harness.build(lane: configuration.lanes[0]), unviable)
             } catch let failure as BuildFailure {
                 guard let repair = configuration.repair else { throw failure }
                 guard let fix = try repair(failure.log, mutants) else { throw failure }
@@ -306,7 +306,7 @@ public struct MutationRun: Sendable {
             }
         }
 
-        return (try configuration.harness.build(lane: configuration.lanes[0]), unviable)
+        return (try await configuration.harness.build(lane: configuration.lanes[0]), unviable)
     }
 
     // MARK: - the whole suite
@@ -314,7 +314,7 @@ public struct MutationRun: Sendable {
     /// Every mutant against every test, a fresh process each. For when the
     /// build does not say which tests are aimed where.
     private func runWholeSuite(_ mutants: [Mutant], built: BuiltTests) async throws -> [MutantResult] {
-        let timeouts = try checkBaseline(built: built, onlyTesting: nil)
+        let timeouts = try await checkBaseline(built: built, onlyTesting: nil)
         return try await runEach(
             mutants, built: built, onlyTesting: nil,
             timeout: timeouts.mutant, tally: Tally(total: mutants.count)
@@ -327,12 +327,12 @@ public struct MutationRun: Sendable {
     /// Every mutant is compiled in but switched off here, so this is the
     /// project's own suite. Measuring against a red baseline would report
     /// mutants as killed by failures that were already there.
-    private func checkBaseline(built: BuiltTests, onlyTesting target: String?) throws -> Batch.Timeouts {
+    private func checkBaseline(built: BuiltTests, onlyTesting target: String?) async throws -> Batch.Timeouts {
         progress(.checkingBaseline)
         let started = Date()
         var timeouts = Batch.Timeouts()
 
-        let baseline = try configuration.harness.test(
+        let baseline = try await configuration.harness.test(
             built,
             lane: configuration.lanes[0],
             switchOn: nil,
@@ -378,7 +378,7 @@ public struct MutationRun: Sendable {
         var plan: Batch.Plan?
         if let batching, !batchable.isEmpty {
             progress(.preparingBatch(targets: batchable.count))
-            plan = try batching.prepareBatch(built, targets: batchable, lane: configuration.lanes[0])
+            plan = try await batching.prepareBatch(built, targets: batchable, lane: configuration.lanes[0])
         }
         let runnable = plan?.built ?? built
 
@@ -445,7 +445,7 @@ public struct MutationRun: Sendable {
         target: String,
         built: BuiltTests
     ) async throws -> [MutantResult] {
-        let timeouts = try checkBaseline(built: built, onlyTesting: target)
+        let timeouts = try await checkBaseline(built: built, onlyTesting: target)
         return try await runEach(
             mutants, built: built, onlyTesting: target,
             timeout: timeouts.mutant, tally: Tally(total: mutants.count)
@@ -507,7 +507,7 @@ public struct MutationRun: Sendable {
                     func refs(_ ids: [String]) -> [TestRef] {
                         ids.map { TestRef(id: $0, name: names[$0] ?? $0, duration: times[$0]) }
                     }
-                    let verdicts = try harness.runBatch(
+                    let verdicts = try await harness.runBatch(
                         plan, target: target, lane: lane, ids: ids, timeouts: Batch.Timeouts()
                     ) { event in
                         switch event {
@@ -628,7 +628,7 @@ public struct MutationRun: Sendable {
                 progress(.started(mutant))
                 group.addTask {
                     let started = Date()
-                    let output = try harness.test(
+                    let output = try await harness.test(
                         built, lane: lane, switchOn: mutant.switchName,
                         timeout: timeout, onlyTesting: target
                     )
