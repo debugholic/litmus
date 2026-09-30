@@ -35,6 +35,39 @@ struct HarnessOptions: ParsableArguments {
     @Option(help: "An xcodebuild destination to use, instead of a simulator.")
     var destination: String?
 
+    /// The combinations that cannot be right whatever the project, refused
+    /// before anything is copied or built.
+    func validate() throws {
+        guard workers >= 1 else {
+            throw ValidationError("--workers has to be at least 1")
+        }
+        guard simulators.isEmpty || destination == nil else {
+            throw ValidationError("pass --simulators or --destination, not both")
+        }
+        // One mutant runs on each simulator, so the list is the width. A
+        // different --workers would be dropped without a word.
+        guard simulators.isEmpty || workers == 1 || workers == simulators.count else {
+            throw ValidationError(
+                "--workers \(workers) with \(simulators.count) simulator(s): "
+                    + "each simulator is a worker, so drop --workers"
+            )
+        }
+        guard destination == nil || workers == 1 else {
+            throw ValidationError("--destination names one device; drop --workers or pass --simulators")
+        }
+        if harness == .swiftpm { try refuseSimulators() }
+    }
+
+    /// Whoever named a simulator expected the tests to run on one.
+    private func refuseSimulators() throws {
+        guard simulators.isEmpty, destination == nil else {
+            throw ValidationError(
+                "--simulators and --destination are for the xcode harness; "
+                    + "a Swift package runs its tests on this machine — pass --harness xcode to use a simulator"
+            )
+        }
+    }
+
     /// The harness to run with, and one lane per worker.
     ///
     /// A simulator is a real lane — a mutant runs on one at a time. A Swift
@@ -52,10 +85,6 @@ struct HarnessOptions: ParsableArguments {
         harness: any TestHarness,
         lanes: [String]
     ) {
-        guard workers >= 1 else {
-            throw ValidationError("--workers has to be at least 1")
-        }
-
         switch harness ?? Discovery.harness(in: project) {
         case .xcode:
             let scheme = try scheme ?? {
@@ -94,6 +123,8 @@ struct HarnessOptions: ParsableArguments {
                         + "parallel runs share .build and report wrong verdicts"
                 )
             }
+            // Found to be a package only now, when no harness was named.
+            try refuseSimulators()
 
             return (SwiftPackage(workingDirectory: project), ["worker 1"])
         }
@@ -105,9 +136,6 @@ struct HarnessOptions: ParsableArguments {
         }
 
         if let destination {
-            guard workers == 1 else {
-                throw ValidationError("--destination names one device; drop --workers or pass --simulators")
-            }
             return [destination]
         }
 
