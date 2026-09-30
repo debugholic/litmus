@@ -149,6 +149,34 @@ struct SummaryScoreTests {
         #expect(area.lowerBound < file.lowerBound)
     }
 
+    @Test("reports the tests that fail when run again beside the score")
+    func failedAloneInReports() throws {
+        let leaning = TestRef(id: "App.T/leaning()/T.swift:3:2", name: "목록이 비어 있지 않다")
+        let sound = TestRef(id: "App.T/sound()/T.swift:9:2", name: "sound")
+        var alone = result(.killed, at: "/p/A.swift")
+        alone.killedBy = [leaning]
+        var both = result(.killed, at: "/p/A.swift")
+        both.killedBy = [leaning, sound]
+        var run = MutationRun.Summary(results: [alone, both, result(.survived, at: "/p/A.swift")], duration: 0)
+        run.failedAlone = [leaning]
+
+        #expect(run.unsureKills.count == 1)
+
+        let plain = try Report(run).rendered(as: .plain)
+        #expect(plain.contains("1 test(s) pass in the suite and fail when run again on their own"))
+        #expect(plain.contains("  목록이 비어 있지 않다  (T.swift)"))
+        #expect(plain.contains("1 kill(s) rest on these tests alone"))
+
+        let json = try #require(
+            JSONSerialization.jsonObject(with: Data(try Report(run).rendered(as: .json).utf8)) as? [String: Any]
+        )
+        #expect((json["failedAlone"] as? [[String: Any]])?.first?["name"] as? String == "목록이 비어 있지 않다")
+        #expect(json["unsureKills"] as? Int == 1)
+
+        #expect(try Report(run).rendered(as: .html).contains("Fail when run again"))
+        #expect(try !Report(MutationRun.Summary(results: [alone], duration: 0)).rendered(as: .plain).contains("run again"))
+    }
+
     // MARK: - run info
 
     private var runInfo: RunInfo {

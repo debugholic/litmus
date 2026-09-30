@@ -281,6 +281,8 @@ struct MutationRunTests {
         let reached: Set<String>?
         /// Tests reaching each switch, reported by a probe, by test id.
         let covering: [String: [String]]
+        /// Tests the probe reports failing on their own.
+        var failingAlone: [String] = []
 
         private let lock = NSLock()
         private(set) var batched: [String: [String]] = [:]
@@ -351,6 +353,9 @@ struct MutationRunTests {
 
             for test in Set(covering.values.joined()) {
                 onEvent(.test(id: test, name: "name of \(test)"))
+            }
+            if ids.contains(Batch.baseline) {
+                failingAlone.forEach { onEvent(.failedAlone($0)) }
             }
             for id in ids {
                 guard let tests = covering[id] else { continue }
@@ -448,6 +453,27 @@ struct MutationRunTests {
         #expect(byMutant[caught.switchName]?.killedBy.map(\.id) == ["t1"])
         #expect(byMutant[missed.switchName]?.coveredBy.map(\.id) == ["t2"])
         #expect(byMutant[missed.switchName]?.killedBy.isEmpty == true)
+    }
+
+    /// A mutant runs like the probe, in the same process with only the tests
+    /// that reach it. A test that fails there without a mutant fails with
+    /// one too.
+    @Test("names the tests that fail when run again, and the kills that rest on them alone")
+    func failedAlone() async throws {
+        let source = try TestSource()
+        let leaning = mutant(1, in: "/project/A.swift")
+        let sound = mutant(2, in: "/project/A.swift")
+        let harness = TargetStub(
+            targets: [.init(name: "ATests", files: [source.url.path], aimedAt: ["/project/A.swift"])],
+            kills: ["ATests": [leaning.switchName, sound.switchName]],
+            covering: [leaning.switchName: ["t1", "t2"], sound.switchName: ["t2", "t1"]]
+        )
+        harness.failingAlone = ["t1"]
+
+        let summary = try await MutationRun(configuration: .init(harness: harness, lanes: ["a", "b"]))([leaning, sound])
+
+        #expect(summary.failedAlone.map(\.name) == ["name of t1"])
+        #expect(summary.unsureKills.map(\.mutant) == [leaning])
     }
 
     /// With the first lane alone probing, a mutant no test reaches came out

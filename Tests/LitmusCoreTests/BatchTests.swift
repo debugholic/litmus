@@ -227,6 +227,7 @@ struct BatchTests {
         #expect(Batch.Report.parse("END Foo_Bar_1_2_3 killed 0.25") == .finished("Foo_Bar_1_2_3", .killed, 0.25))
         #expect(Batch.Report.parse("END - survived 3.5") == .finished("-", .survived, 3.5))
         #expect(Batch.Report.parse("noise from the runner") == nil)
+        #expect(Batch.Report.parse("ALONE\tApp.T/a()/A.swift:1:1") == .failedAlone("App.T/a()/A.swift:1:1"))
     }
 
     // MARK: - the driver

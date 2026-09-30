@@ -31,6 +31,10 @@ public enum Batch {
         case killedBy(String, tests: [String])
         /// How long a test took on its own, while probing.
         case timed(String, seconds: TimeInterval)
+        /// A test that failed when run again on its own, while probing,
+        /// though the suite had just passed with it in: it depends on state
+        /// the run left behind, or it is flaky.
+        case failedAlone(String)
     }
 
     /// How long to wait before deciding a launch or a mutant is stuck.
@@ -165,6 +169,9 @@ public enum Batch {
                         for (test, seconds) in found.durations.sorted(by: { $0.key < $1.key }) {
                             record("TIME\\t\\(Self.field(test))\\t\\(seconds)")
                         }
+                        for test in found.failedAlone {
+                            record("ALONE\\t\\(Self.field(test))")
+                        }
                         for id in Self.reached(in: probeDirectory) {
                             record("REACHED \\(id)")
                         }
@@ -226,7 +233,10 @@ public enum Batch {
         private static func probe(
             in directory: String,
             run: ([String]?) async -> CInt
-        ) async -> (reaching: [String: [String]], names: [String: String], durations: [String: TimeInterval]) {
+        ) async -> (
+            reaching: [String: [String]], names: [String: String], durations: [String: TimeInterval],
+            failedAlone: [String]
+        ) {
             let listing = directory + "/tests.jsonl"
             var arguments = __CommandLineArguments_v0()
             arguments.listTests = true
@@ -251,12 +261,19 @@ public enum Batch {
 
             var reaching: [String: [String]] = [:]
             var durations: [String: TimeInterval] = [:]
+            // The suite passed just before, in this same process, so a test
+            // that fails here depends on state the run left behind, or is
+            // flaky. Either way it fails in a mutant's run too, mutant or
+            // not. A test that needs another to run first is not seen: that
+            // one has run already, and what it set is still set.
+            var failedAlone: [String] = []
             for (index, test) in tests.enumerated() {
                 let file = directory + "/\\(index).probe"
                 setenv("\(MutationSwitch.probeVariable)", file, 1)
                 let started = Date()
-                _ = await run([NSRegularExpression.escapedPattern(for: test)])
+                let code = await run([NSRegularExpression.escapedPattern(for: test)])
                 durations[test] = Date().timeIntervalSince(started)
+                if code != 0, code != \(noTestsFound) { failedAlone.append(test) }
                 unsetenv("\(MutationSwitch.probeVariable)")
 
                 for id in ((try? String(contentsOfFile: file, encoding: .utf8)) ?? "").split(separator: "\\n") {
@@ -266,7 +283,7 @@ public enum Batch {
 
             let map = reaching.map { ([$0.key] + $0.value).joined(separator: "\\t") }.joined(separator: "\\n")
             try? map.write(toFile: directory + "/map.tsv", atomically: true, encoding: .utf8)
-            return (reaching, names, durations)
+            return (reaching, names, durations, failedAlone)
         }
 
         /// The tests that recorded an issue in a run's event stream: the ones
@@ -393,6 +410,8 @@ extension Batch {
                 return .killedBy(fields[1], tests: Array(fields.dropFirst(2)))
             case "TIME" where fields.count == 3:
                 return TimeInterval(fields[2]).map { .timed(fields[1], seconds: $0) }
+            case "ALONE" where fields.count == 2:
+                return .failedAlone(fields[1])
             default:
                 break
             }

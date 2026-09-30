@@ -114,6 +114,26 @@ public struct StrykerReport: Sendable {
         if let took = Report.took(summary) { meta.append(took) }
         parts.append(meta.map { "<p class=\"muted\">\($0)</p>" }.joined(separator: "\n"))
 
+        // Beside the scores, because it is about them.
+        if !summary.failedAlone.isEmpty {
+            let unsure = summary.unsureKills
+            let rows = summary.failedAlone.map { test in
+                let resting = unsure.count { $0.killedBy.contains { $0.id == test.id } }
+                return """
+                <tr><td>\(Self.escape(test.name))</td><td>\(Self.escape(test.file ?? ""))</td>\
+                <td class="num">\(resting)</td></tr>
+                """
+            }.joined(separator: "\n")
+            parts.append(Self.table(
+                title: "Fail when run again",
+                note: "pass in the suite, fail on their own after it — they depend on state left behind, or are flaky; "
+                    + "\(unsure.count) kill(s) rest on them alone and may not be the mutant's doing",
+                head: ["Test", "File", "Kills resting on it"],
+                numbers: [2],
+                rows: rows
+            ))
+        }
+
         let areas = summary.areas
         if areas.count > 1 {
             let rows = areas.map { area in
