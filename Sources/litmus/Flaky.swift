@@ -10,19 +10,13 @@ struct Flaky: AsyncParsableCommand {
     @Option(help: "Project to test. It is never modified.")
     var project: String = "."
 
-    @OptionGroup var harness: HarnessOptions
-
     @Option(help: "Only run the tests changed since this git ref.")
     var since: String?
 
     @Flag(help: "Run every test, not only the ones this branch changed.")
     var all = false
 
-    @Flag(help: """
-    Run every changed test, not only the ones that reach something that can \
-    vary: a task, the clock, chance, shared state.
-    """)
-    var everyChanged = false
+    @OptionGroup var device: DeviceOptions
 
     @Option(help: """
     How many times to run the tests together. 100 by default for the tests a \
@@ -39,10 +33,6 @@ struct Flaky: AsyncParsableCommand {
     func validate() throws {
         guard (runs ?? 1) >= 1 else { throw ValidationError("--runs has to be at least 1") }
         guard since == nil || !all else { throw ValidationError("pass --since or --all, not both") }
-        // One simulator does it all: the passes are in order, in one process.
-        guard harness.workers == 1, harness.simulators.count <= 1 else {
-            throw ValidationError("litmus flaky runs on one simulator; drop --workers, and pass one --simulators at most")
-        }
     }
 
     func run() async throws {
@@ -76,33 +66,31 @@ struct Flaky: AsyncParsableCommand {
             // Before anything is built: a test that reaches nothing that
             // can vary comes out the same every time, and rerunning it
             // costs a build and a launch for nothing.
-            if !everyChanged {
-                let risk = FlakyRisk(root: project)
-                var found: [ChangedTests.Span] = []
-                var lines: [String] = []
-                for path in testFiles.sorted() {
-                    let file = project.appendingPathComponent(path).path
-                    for test in ChangedTests.picked(inFile: file, changed: diff.lines(of: path)) {
-                        if let finding = risk.finding(for: test.function) {
-                            found.append(test.span)
-                            lines.append("    \(test.name) — \(finding.factor), via \(finding.path.joined(separator: " → "))")
-                        } else {
-                            calm.append(test.name)
-                        }
+            let risk = FlakyRisk(root: project)
+            var found: [ChangedTests.Span] = []
+            var lines: [String] = []
+            for path in testFiles.sorted() {
+                let file = project.appendingPathComponent(path).path
+                for test in ChangedTests.picked(inFile: file, changed: diff.lines(of: path)) {
+                    if let finding = risk.finding(for: test.function) {
+                        found.append(test.span)
+                        lines.append("    \(test.name) — \(finding.factor), via \(finding.path.joined(separator: " → "))")
+                    } else {
+                        calm.append(test.name)
                     }
                 }
-                print("  \(found.count + calm.count) changed test(s), \(found.count) reaching something that can vary:")
-                lines.forEach { print($0) }
-                if !calm.isEmpty {
-                    print("  left out, since nothing they reach can vary: \(calm.joined(separator: ", "))")
-                }
-                guard !found.isEmpty else {
-                    print("no changed test reaches anything that can vary, so none is run again.")
-                    print("Pass --every-changed to run them anyway.")
-                    return
-                }
-                risky = found
             }
+            print("  \(found.count + calm.count) changed test(s), \(found.count) reaching something that can vary:")
+            lines.forEach { print($0) }
+            if !calm.isEmpty {
+                print("  left out, since nothing they reach can vary: \(calm.joined(separator: ", "))")
+            }
+            guard !found.isEmpty else {
+                print("no changed test reaches anything that can vary, so none is run again.")
+                print("Pass --all to run every test anyway.")
+                return
+            }
+            risky = found
         } else {
             print("  every test")
         }
@@ -120,7 +108,7 @@ struct Flaky: AsyncParsableCommand {
         try RunLock.acquire(for: working)
         try ProjectInjection.clone(project, to: working)
 
-        let (testHarness, lanes) = try harness.resolved(for: working, writeScheme: true) { print("  \($0)") }
+        let (testHarness, lanes) = try HarnessOptions.resolve(device, workers: 1, for: working, writeScheme: true) { print("  \($0)") }
         guard let xcodebuild = testHarness as? Xcodebuild else {
             throw ValidationError("litmus flaky runs Xcode projects for now; this one runs with swift test")
         }
@@ -194,7 +182,7 @@ struct Flaky: AsyncParsableCommand {
             duration: Date().timeIntervalSince(startedAt),
             run: RunInfo(
                 date: startedAt, commit: git.commit, branch: git.branch, version: Litmus.version,
-                operators: [], harness: "xcode, scheme \(xcodebuild.scheme), \(harness.destination == nil ? "1 simulator" : lane)"
+                operators: [], harness: "xcode, scheme \(xcodebuild.scheme), \(device.destination == nil ? "1 simulator" : lane)"
             )
         )
         let rendered = try report.rendered(as: format)

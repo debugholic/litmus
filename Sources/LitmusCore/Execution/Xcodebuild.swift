@@ -304,8 +304,8 @@ public struct Xcodebuild: Sendable, TestHarness {
 
             \(failures.joined(separator: "\n"))
 
-            Fix those first, or pass --no-coverage to skip this step — the \
-            baseline check will stop the run anyway.
+            Fix those first: measured against a failing suite, every mutant \
+            would look caught.
             """
         }
 

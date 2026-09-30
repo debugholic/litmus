@@ -36,14 +36,11 @@ struct Run: AsyncParsableCommand {
     @Option(help: "Project to test. It is never modified.")
     var project: String = "."
 
-    @Option(help: "An already injected plan, from 'litmus inject'.")
+    @Option(help: ArgumentHelp("An already injected plan, from 'litmus inject'.", visibility: .hidden))
     var plan: String?
 
     @OptionGroup var scope: ScopeOptions
     @OptionGroup var harness: HarnessOptions
-
-    @Flag(help: "Give every mutant a fresh process instead of running them in one.")
-    var isolate = false
 
     @Option(help: "Report format: plain, json, html or xcode.")
     var format: ReportFormat = .plain
@@ -53,9 +50,6 @@ struct Run: AsyncParsableCommand {
 
     @Option(help: "Exit with a failure when the Litmus score is under this percentage.")
     var failUnder: Double?
-
-    @Option(help: "Exit with a failure when the mutation score, over every mutant, is under this percentage.")
-    var failUnderMutationScore: Double?
 
     func run() async throws {
         let startedAt = Date()
@@ -114,7 +108,6 @@ struct Run: AsyncParsableCommand {
             configuration: .init(
                 harness: testHarness,
                 lanes: lanes,
-                batching: !isolate,
                 repair: repair.map { repair in
                     Self.repairing(with: repair, allTests: allTests, in: working)
                 }
@@ -158,7 +151,7 @@ struct Run: AsyncParsableCommand {
         print("\n  report: \(Self.link(to: html))")
 
         // After the reports, so a failing run still leaves them to read.
-        let shortfalls = summary.shortfalls(testStrength: failUnder, mutationScore: failUnderMutationScore)
+        let shortfalls = summary.shortfalls(testStrength: failUnder, mutationScore: nil)
         if !shortfalls.isEmpty {
             for shortfall in shortfalls { print("  \(shortfall)".red) }
             throw ExitCode(2)
