@@ -23,7 +23,9 @@ struct Injection {
     let scope: ScopeOptions
     let harness: HarnessOptions
 
-    func callAsFunction(verbose: Bool) async throws -> ProjectInjection.Result {
+    /// The mutants written, and how long the coverage run took, when there
+    /// was one.
+    func callAsFunction(verbose: Bool) async throws -> (result: ProjectInjection.Result, coverage: TimeInterval) {
         var changed: ChangedLines?
         if let base = scope.base(for: project) {
             let diff = try GitDiff.changed(since: base, in: project)
@@ -48,6 +50,7 @@ struct Injection {
         try ProjectInjection.clone(project, to: workingCopy)
 
         var coverage: Coverage?
+        var coverageTook: TimeInterval = 0
         var tested: TestedScope?
         if measuresCoverage {
             let (testHarness, lanes) = try harness.resolved(for: workingCopy, writeScheme: true) {
@@ -70,6 +73,7 @@ struct Injection {
             print("  measured in \(Heartbeat.format(took ?? 0))"
                 + " — \(measured.deadFiles) file(s) with nothing running in them")
             coverage = measured
+            coverageTook = took ?? 0
 
             // The coverage run already built the tests, so it can say which
             // modules they are aimed at before anything is written.
@@ -97,7 +101,7 @@ struct Injection {
             """)
         }
 
-        return result
+        return (result, coverageTook)
     }
 
     /// Whether to run the suite with coverage on before injecting.

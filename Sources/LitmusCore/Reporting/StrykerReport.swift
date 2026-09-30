@@ -438,9 +438,11 @@ public struct StrykerReport: Sendable {
             "files": files,
         ]
         // The schema's own names for the three parts of a run, in milliseconds.
+        // Its setup is everything before the first test run.
         if summary.duration > 0 {
+            let setup = summary.phases.setup + summary.phases.coverage + summary.phases.build
             report["performance"] = [
-                "setup": Int(summary.phases.build * 1000),
+                "setup": Int(setup * 1000),
                 "initialRun": Int(summary.phases.baseline * 1000),
                 "mutation": Int(summary.mutantTime * 1000),
             ]

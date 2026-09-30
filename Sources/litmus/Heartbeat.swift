@@ -1,4 +1,5 @@
 import Foundation
+import LitmusCore
 
 /// Says what a step is doing and how long it has been at it, while it runs.
 ///
@@ -118,14 +119,15 @@ final class Heartbeat: @unchecked Sendable {
 
     /// Replaces the current line: back to its start, clear it, write.
     ///
-    /// Cut to the terminal's width. A line that wraps leaves its first half
-    /// behind, and every redraw after it stacks another copy.
+    /// Cut to the terminal's width, in columns rather than characters. A
+    /// line that wraps leaves its first half behind, and every redraw after
+    /// it stacks another copy.
     private func draw(_ text: String) {
         let trailingNewline = text.hasSuffix("\n")
         var body = trailingNewline ? String(text.dropLast()) : text
         let width = Self.columns
-        if width > 1, body.count > width - 1 {
-            body = String(body.prefix(width - 2)) + "…"
+        if width > 1 {
+            body = TerminalWidth.cut(body, to: width - 1)
         }
         print("\r\u{1B}[2K" + body + (trailingNewline ? "\n" : ""), terminator: "")
         fflush(stdout)

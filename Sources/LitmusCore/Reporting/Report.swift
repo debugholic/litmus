@@ -38,10 +38,13 @@ public struct Report: Sendable {
     static func took(_ summary: MutationRun.Summary) -> String? {
         guard summary.duration > 0 else { return nil }
         var parts: [String] = []
+        // Under half a second, it would read "0s".
+        if summary.phases.setup >= 0.5 { parts.append("setup \(duration(summary.phases.setup))") }
+        if summary.phases.coverage >= 0.5 { parts.append("coverage \(duration(summary.phases.coverage))") }
         if summary.phases.build > 0 { parts.append("build \(duration(summary.phases.build))") }
         if summary.phases.baseline > 0 { parts.append("launch and baseline \(duration(summary.phases.baseline))") }
         if !parts.isEmpty { parts.append("mutants \(duration(summary.mutantTime))") }
-        return "took \(duration(summary.duration))" + (parts.isEmpty ? "" : " — " + parts.joined(separator: ", "))
+        return "took \(duration(summary.total))" + (parts.isEmpty ? "" : " — " + parts.joined(separator: ", "))
     }
 
     static func duration(_ value: TimeInterval) -> String {
@@ -236,7 +239,7 @@ public struct Report: Sendable {
             "timeout": summary.timedOut,
             "unviable": summary.unviable,
             "error": summary.errored,
-            "duration": summary.duration,
+            "duration": summary.total,
             "run": [
                 "date": run.map { ISO8601DateFormatter().string(from: $0.date) } as Any,
                 "commit": run?.commit as Any,
@@ -244,6 +247,8 @@ public struct Report: Sendable {
                 "version": run?.version as Any,
                 "operators": run?.operators as Any,
                 "harness": run?.harness as Any,
+                "setup": summary.phases.setup,
+                "coverage": summary.phases.coverage,
                 "build": summary.phases.build,
                 "baseline": summary.phases.baseline,
                 "mutants": summary.mutantTime,
