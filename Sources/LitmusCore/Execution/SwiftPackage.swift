@@ -16,13 +16,41 @@ public struct SwiftPackage: Sendable, TestHarness {
 
     let executable: String
     let workingDirectory: URL
+    /// `--build-system native`, where the toolchain still has it.
+    ///
+    /// Swift 6.4's default build system stops compiling a module's other
+    /// files once one fails, so a build with rejected mutants names one file's
+    /// worth and the repair takes a build per file. The native one compiles
+    /// them all: on Litmus's own source, 17 rejected mutants in 8 files
+    /// against 1 in 1. Every call takes it, because `--skip-build` looks for
+    /// the products where its own build system put them.
+    let buildSystem: [String]
 
     public init(
         executable: String = "/usr/bin/swift",
-        workingDirectory: URL
+        workingDirectory: URL,
+        buildSystem: [String]? = nil
     ) {
         self.executable = executable
         self.workingDirectory = workingDirectory
+        self.buildSystem = buildSystem ?? Self.nativeBuildSystem(executable: executable)
+    }
+
+    /// Read from `swift build --help`, which lists the build systems it takes.
+    static func nativeBuildSystem(executable: String) -> [String] {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = ["build", "--help"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        guard (try? process.run()) != nil else { return [] }
+        let help = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
+
+        return help.contains("--build-system") && help.contains("native")
+            ? ["--build-system", "native"]
+            : []
     }
 
     public func build(lane: String) async throws -> BuiltTests {
@@ -54,7 +82,7 @@ public struct SwiftPackage: Sendable, TestHarness {
 
         let output = try await Subprocess.run(
             executable: executable,
-            arguments: ["test", "--skip-build"],
+            arguments: ["test", "--skip-build"] + buildSystem,
             directory: workingDirectory,
             environment: environment,
             timeout: timeout
@@ -98,7 +126,7 @@ public struct SwiftPackage: Sendable, TestHarness {
     /// layout differs between build systems.
     private func codecovDirectory() async throws -> URL {
         let (path, status) = try await run(arguments: ["test", "--show-codecov-path"])
-        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = Self.lastLine(of: path)
 
         guard status == 0, !trimmed.isEmpty else {
             throw Failure(description: "could not find the coverage directory")
@@ -109,7 +137,7 @@ public struct SwiftPackage: Sendable, TestHarness {
 
     private func testBundle() async throws -> URL {
         let (path, status) = try await run(arguments: ["build", "--show-bin-path"])
-        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = Self.lastLine(of: path)
 
         guard status == 0, !trimmed.isEmpty else {
             throw Failure(description: "could not find the build directory")
@@ -129,6 +157,14 @@ public struct SwiftPackage: Sendable, TestHarness {
         return bundle.appendingPathComponent("Contents/MacOS/\(name)")
     }
 
+    /// The path a `--show-…-path` printed, which is its last line: the
+    /// native build system warns that it is deprecated on the lines before.
+    static func lastLine(of output: String) -> String {
+        output.split(whereSeparator: \.isNewline)
+            .last { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            .map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
+    }
+
     private func run(
         executable: String? = nil,
         arguments: [String],
@@ -136,7 +172,7 @@ public struct SwiftPackage: Sendable, TestHarness {
     ) async throws -> (log: String, status: Int32) {
         let output = try await Subprocess.run(
             executable: executable ?? self.executable,
-            arguments: arguments,
+            arguments: executable == nil ? arguments + buildSystem : arguments,
             directory: workingDirectory,
             environment: environment
         )
