@@ -26,7 +26,7 @@ struct Inject: AsyncParsableCommand {
 
         let result: ProjectInjection.Result
         do {
-            result = try Injection(
+            result = try await Injection(
                 project: project,
                 workingCopy: workingCopy,
                 scope: scope,

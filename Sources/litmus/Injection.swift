@@ -23,7 +23,7 @@ struct Injection {
     let scope: ScopeOptions
     let harness: HarnessOptions
 
-    func callAsFunction(verbose: Bool) throws -> ProjectInjection.Result {
+    func callAsFunction(verbose: Bool) async throws -> ProjectInjection.Result {
         var changed: ChangedLines?
         if let base = scope.base(for: project) {
             let diff = try GitDiff.changed(since: base, in: project)
@@ -58,7 +58,7 @@ struct Injection {
             heartbeat.begin("  measuring coverage — building and running the suite once…")
             defer { heartbeat.end() }
 
-            let measured = try Self.measure(testHarness, lane: lanes[0], in: workingCopy, heartbeat: heartbeat)
+            let measured = try await Self.measure(testHarness, lane: lanes[0], in: workingCopy, heartbeat: heartbeat)
             let took = heartbeat.end()
 
             guard !measured.isEmpty else {
@@ -127,12 +127,12 @@ struct Injection {
         lane: String,
         in workingCopy: URL,
         heartbeat: Heartbeat
-    ) throws -> Coverage {
+    ) async throws -> Coverage {
         let allTests = (harness as? Xcodebuild)?.scheme == AllTestsScheme.name
 
         for _ in 0..<10 {
             do {
-                return try harness.coverage(lane: lane)
+                return try await harness.coverage(lane: lane)
             } catch let failure as SuiteFailure where allTests {
                 let failedBundles = (harness as? Xcodebuild).map {
                     TestedScope.failedTestTargets(inResultBundle: $0.coverageBundle)
@@ -150,13 +150,13 @@ struct Injection {
                 // measured, and running it all again would measure it again.
                 let built = AllTestsScheme.failures(in: failure.log).projects.isEmpty
                 if built, !failedBundles.isEmpty, let xcodebuild = harness as? Xcodebuild,
-                   let measured = try? xcodebuild.lastCoverage(), !measured.isEmpty {
+                   let measured = try? await xcodebuild.lastCoverage(), !measured.isEmpty {
                     return measured
                 }
             }
         }
 
-        return try harness.coverage(lane: lane)
+        return try await harness.coverage(lane: lane)
     }
 
     /// One line saying what was left out, so a small run never looks like a

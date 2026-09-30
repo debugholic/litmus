@@ -69,7 +69,7 @@ public protocol TestHarness: Sendable {
     var laneNoun: String { get }
 
     /// Builds the tests once, with every mutant compiled in but switched off.
-    func build(lane: String) throws -> BuiltTests
+    func build(lane: String) async throws -> BuiltTests
 
     /// Runs the built tests, with at most one mutant switched on, stopping
     /// them after `timeout` seconds when one is given. `onlyTesting` names
@@ -80,14 +80,14 @@ public protocol TestHarness: Sendable {
         switchOn mutantSwitch: String?,
         timeout: TimeInterval?,
         onlyTesting target: String?
-    ) throws -> TestOutput
+    ) async throws -> TestOutput
 
     /// Runs the suite once with coverage on, and reports what it reached.
     ///
     /// Measured on the project as written, before any mutant exists: the
     /// positions in a plan are positions in the original file, and injection
     /// moves every line below it.
-    func coverage(lane: String) throws -> Coverage
+    func coverage(lane: String) async throws -> Coverage
 
     /// The source files the built tests are aimed at, or nil when the harness
     /// cannot tell. Mutants outside it are not run.
@@ -99,8 +99,8 @@ public protocol TestHarness: Sendable {
 }
 
 extension TestHarness {
-    public func test(_ built: BuiltTests, lane: String, switchOn mutantSwitch: String?) throws -> TestOutput {
-        try test(built, lane: lane, switchOn: mutantSwitch, timeout: nil, onlyTesting: nil)
+    public func test(_ built: BuiltTests, lane: String, switchOn mutantSwitch: String?) async throws -> TestOutput {
+        try await test(built, lane: lane, switchOn: mutantSwitch, timeout: nil, onlyTesting: nil)
     }
 
     public func testedScope(_ built: BuiltTests) -> TestedScope? { nil }
@@ -110,7 +110,7 @@ extension TestHarness {
 /// A harness that can run many mutants in one test process.
 public protocol BatchingHarness: TestHarness {
     /// Adds the driver to these test targets and rebuilds the tests once.
-    func prepareBatch(_ built: BuiltTests, targets: [TestedScope.TestTarget], lane: String) throws -> Batch.Plan
+    func prepareBatch(_ built: BuiltTests, targets: [TestedScope.TestTarget], lane: String) async throws -> Batch.Plan
 
     /// Runs the batch in one test target to the end, relaunching past any
     /// mutant that takes the process down, and returns a verdict for every id.
@@ -121,5 +121,5 @@ public protocol BatchingHarness: TestHarness {
         ids: [String],
         timeouts: Batch.Timeouts,
         onEvent: (Batch.Event) -> Void
-    ) throws -> [String: Verdict]
+    ) async throws -> [String: Verdict]
 }
