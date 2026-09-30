@@ -99,7 +99,7 @@ enum Discovery {
             let root = try? JSONSerialization.jsonObject(with: Data(listed.utf8)) as? [String: Any],
             let byRuntime = root["devices"] as? [String: [[String: Any]]]
         else {
-            throw Failure(description: "could not list simulators — pass --simulators")
+            throw Failure(description: "could not list simulators — pass --destination")
         }
 
         // Runtime identifiers sort by version, so the last one is the newest.

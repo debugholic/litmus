@@ -3,7 +3,7 @@ import Foundation
 import LitmusCore
 
 /// Which harness the run uses.
-enum HarnessKind: String, ExpressibleByArgument, CaseIterable {
+enum HarnessKind: String, CaseIterable {
     /// Builds a scheme and runs it on a simulator.
     case xcode
     /// Runs the package's own tests on this machine. No simulator, so a mutant
@@ -11,29 +11,26 @@ enum HarnessKind: String, ExpressibleByArgument, CaseIterable {
     case swiftpm
 }
 
-/// How to build and run the suite.
-///
-/// Every option here has an answer that can be worked out from the project, so
-/// all of them are optional. They exist for the times the guess is wrong or the
-/// project is ambiguous, not for every run.
-struct HarnessOptions: ParsableArguments {
-    @Option(help: "How to run the tests. Worked out from the project by default.")
-    var harness: HarnessKind?
-
+/// Where the tests run. Both are worked out from the project; they are here
+/// for when the guess is wrong.
+struct DeviceOptions: ParsableArguments {
     @Option(help: "Run only this scheme's tests, instead of every unit test in the project.")
     var scheme: String?
 
-    @Option(help: "How many mutants to run at once.")
-    var workers: Int = 1
-
-    @Option(
-        parsing: .upToNextOption,
-        help: "Simulator UDIDs to use, instead of picking them."
-    )
-    var simulators: [String] = []
-
-    @Option(help: "An xcodebuild destination to use, instead of a simulator.")
+    @Option(help: "An xcodebuild destination to use, instead of a simulator litmus picks.")
     var destination: String?
+}
+
+/// How to build and run the suite, and how many mutants at once.
+///
+/// Whether the project runs on a simulator or with `swift test` is worked
+/// out from it: a package that uses UIKit, or is for iOS alone, goes to a
+/// simulator.
+struct HarnessOptions: ParsableArguments {
+    @OptionGroup var device: DeviceOptions
+
+    @Option(help: "How many mutants to run at once, each on a simulator of its own.")
+    var workers: Int = 1
 
     /// The combinations that cannot be right whatever the project, refused
     /// before anything is copied or built.
@@ -41,31 +38,17 @@ struct HarnessOptions: ParsableArguments {
         guard workers >= 1 else {
             throw ValidationError("--workers has to be at least 1")
         }
-        guard simulators.isEmpty || destination == nil else {
-            throw ValidationError("pass --simulators or --destination, not both")
+        guard device.destination == nil || workers == 1 else {
+            throw ValidationError("--destination names one device; drop --workers")
         }
-        // One mutant runs on each simulator, so the list is the width. A
-        // different --workers would be dropped without a word.
-        guard simulators.isEmpty || workers == 1 || workers == simulators.count else {
-            throw ValidationError(
-                "--workers \(workers) with \(simulators.count) simulator(s): "
-                    + "each simulator is a worker, so drop --workers"
-            )
-        }
-        guard destination == nil || workers == 1 else {
-            throw ValidationError("--destination names one device; drop --workers or pass --simulators")
-        }
-        if harness == .swiftpm { try refuseSimulators() }
     }
 
-    /// Whoever named a simulator expected the tests to run on one.
-    private func refuseSimulators() throws {
-        guard simulators.isEmpty, destination == nil else {
-            throw ValidationError(
-                "--simulators and --destination are for the xcode harness; "
-                    + "a Swift package runs its tests on this machine — pass --harness xcode to use a simulator"
-            )
-        }
+    func resolved(
+        for project: URL,
+        writeScheme: Bool = false,
+        say: (String) -> Void = { _ in }
+    ) throws -> (harness: any TestHarness, lanes: [String]) {
+        try Self.resolve(device, workers: workers, for: project, writeScheme: writeScheme, say: say)
     }
 
     /// The harness to run with, and one lane per worker.
@@ -77,17 +60,16 @@ struct HarnessOptions: ParsableArguments {
     /// through a scheme Litmus writes for the purpose. `writeScheme` says
     /// `project` is Litmus's own copy and the scheme may be written into it;
     /// otherwise one already there is used, and nothing is written.
-    func resolved(
+    static func resolve(
+        _ device: DeviceOptions,
+        workers: Int,
         for project: URL,
         writeScheme: Bool = false,
         say: (String) -> Void = { _ in }
-    ) throws -> (
-        harness: any TestHarness,
-        lanes: [String]
-    ) {
-        switch harness ?? Discovery.harness(in: project) {
+    ) throws -> (harness: any TestHarness, lanes: [String]) {
+        switch Discovery.harness(in: project) {
         case .xcode:
-            let scheme = try scheme ?? {
+            let scheme = try device.scheme ?? {
                 if let all = try Discovery.allTestsScheme(in: project, write: writeScheme) {
                     say("every unit test in the project, through a scheme of litmus's own")
                     return all
@@ -97,6 +79,17 @@ struct HarnessOptions: ParsableArguments {
                 return found
             }()
 
+            let lanes: [String]
+            if let destination = device.destination {
+                lanes = [destination]
+            } else {
+                let found = try Discovery.simulators(count: workers)
+                if found.count < workers {
+                    say("only \(found.count) simulator(s) available, so that is the width")
+                }
+                lanes = found.map { "platform=iOS Simulator,id=\($0)" }
+            }
+
             return (
                 Xcodebuild(
                     workingDirectory: project,
@@ -104,7 +97,7 @@ struct HarnessOptions: ParsableArguments {
                     derivedDataPath: project.appendingPathComponent("build/litmus"),
                     onActivity: { Heartbeat.shared.report($0) }
                 ),
-                try destinations(say: say)
+                lanes
             )
 
         case .swiftpm:
@@ -119,33 +112,19 @@ struct HarnessOptions: ParsableArguments {
             // make it sound, and is the way to lift this.
             guard workers == 1 else {
                 throw ValidationError(
-                    "the swiftpm harness runs one mutant at a time: "
+                    "a Swift package runs one mutant at a time: "
                         + "parallel runs share .build and report wrong verdicts"
                 )
             }
-            // Found to be a package only now, when no harness was named.
-            try refuseSimulators()
+            // Whoever named a device expected the tests to run on one.
+            guard device.destination == nil, device.scheme == nil else {
+                throw ValidationError(
+                    "--scheme and --destination are for Xcode projects; this package runs its tests with swift test"
+                )
+            }
 
             return (SwiftPackage(workingDirectory: project), ["worker 1"])
         }
-    }
-
-    private func destinations(say: (String) -> Void) throws -> [String] {
-        if !simulators.isEmpty {
-            return simulators.map { "platform=iOS Simulator,id=\($0)" }
-        }
-
-        if let destination {
-            return [destination]
-        }
-
-        let found = try Discovery.simulators(count: workers)
-
-        if found.count < workers {
-            say("only \(found.count) simulator(s) available, so that is the width")
-        }
-
-        return found.map { "platform=iOS Simulator,id=\($0)" }
     }
 }
 
@@ -159,15 +138,6 @@ struct ScopeOptions: ParsableArguments {
 
     @Flag(help: "Mutate the whole tree, not only what this branch changed.")
     var all = false
-
-    @Flag(
-        inversion: .prefixedNo,
-        help: """
-        Measure coverage first, to skip mutants no test reaches. By default only \
-        when a test is XCTest; Swift Testing is probed in process instead.
-        """
-    )
-    var coverage: Bool?
 
     /// The ref to diff against, or nil to take the whole tree.
     ///

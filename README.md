@@ -70,8 +70,7 @@ Litmus score 50%
 killed 1 / survived 1 / error 0
 ```
 
-Where a guess would be wrong, pass it: `--harness xcode|swiftpm`,
-`--simulators <UDID>…`, `--destination`.
+Where a guess would be wrong, pass it: `--scheme <name>`, `--destination`.
 
 ### Every test, not a scheme's
 
@@ -160,7 +159,6 @@ writing, so a skipped mutant costs neither a run nor the file growth.
 ```
 litmus --all           # the whole tree
 litmus --since main    # a different base
-litmus --no-coverage   # keep what no test reaches
 litmus --only Checkout # only paths containing this
 ```
 
@@ -168,7 +166,7 @@ On one iOS project — 1,492 mutants across 105 files:
 
 | | mutants | on one simulator |
 |---|---|---|
-| `--all --no-coverage` | 1,492 | a day |
+| `--all`, nothing filtered | 1,492 | a day |
 | `--all` | 203 | hours |
 | the default | 16 | minutes |
 
@@ -195,9 +193,10 @@ The original is never modified, by either command.
 
 ### Two ways to run the tests
 
-`--harness xcode` builds a scheme and runs it on a simulator.
+An Xcode project, or a package that uses UIKit or is for iOS alone, builds a
+scheme and runs it on a simulator.
 
-`--harness swiftpm` runs the package's own tests on this machine. A package
+Any other package runs its own tests on this machine with `swift test`. A package
 that never reaches for UIKit does not need a simulator, and the simulator is
 what a mutation run actually costs — on one project, narrowing the suite with
 `-only-testing` cut test time from 24.6s to 0.236s without moving the wall
@@ -207,6 +206,37 @@ run against itself this way costs about 6 seconds per mutant.
 Litmus picks between them by looking for an `.xcodeproj` or `.xcworkspace`, and
 failing that, for an `import UIKit`: a project that reaches for UIKit cannot
 build for this machine whatever else is true of it.
+
+## Flaky tests
+
+`litmus flaky` reruns the tests and names the ones whose result changes.
+
+```
+litmus flaky          # the tests this branch changed
+litmus flaky --all    # every test
+```
+
+Before building, it follows what each changed test calls through the
+project's sources, and keeps the tests that reach something that can vary:
+a task, a timer, the clock, chance, `UserDefaults`, a shared instance. When
+none does, it stops there, without a build. The rest run on one simulator,
+in one process:
+
+1. each alone, last first, before anything else — one that needs another
+   test to run first fails here
+2. together, 100 times (10 with `--all`) — one that fails at random
+3. each alone again — one that depends on state the others left behind
+
+```
+1 test(s) not stable:
+  refreshesOnResume()  fails 3 of 100 runs together  (FeedViewModelTests.swift)
+
+took 2m 3s — build 19s, launch 1m 29s, alone 0.1s, together 100 × 0.1s (0.0s–1.9s)
+```
+
+It exits with 2 when a test is not stable. Swift Testing only: XCTest cases
+are not rerun.
+
 
 ## How it works
 
@@ -247,7 +277,7 @@ offset. Offsets are UTF-8 byte counts and string indices are characters; the
 two agree only for ASCII, so a file with a non-English comment in it silently
 takes the edit in the wrong place.
 
-With `--harness xcode`, step 3 uses `TEST_RUNNER_<VAR>`, which `man xcodebuild`
+On a simulator, step 3 uses `TEST_RUNNER_<VAR>`, which `man xcodebuild`
 documents as the supported way to pass a variable into the test runner process.
 The generated `.xctestrun` is read, never written, so mutants can run on
 several simulators at once without stepping on each other.
@@ -274,8 +304,6 @@ Two kinds of mutant still get a process of their own:
 - **Values Swift computes once.** A global's or a static property's initial
   value is kept from the first time it is read, with whichever mutant was on
   then. Those mutants run after the batch, one launch each.
-
-`--isolate` gives every mutant a fresh process regardless.
 
 ## Operators
 

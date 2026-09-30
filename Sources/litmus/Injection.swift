@@ -64,16 +64,16 @@ struct Injection {
             let measured = try await Self.measure(testHarness, lane: lanes[0], in: workingCopy, heartbeat: heartbeat)
             let took = heartbeat.end()
 
-            guard !measured.isEmpty else {
-                throw ValidationError(
-                    "the coverage run reported nothing — pass --no-coverage to skip this"
-                )
-            }
-
-            print("  measured in \(Heartbeat.format(took ?? 0))"
-                + " — \(measured.deadFiles) file(s) with nothing running in them")
-            coverage = measured
             coverageTook = took ?? 0
+            if measured.isEmpty {
+                // Nothing to filter by; every mutant runs, which costs time
+                // and not the answer.
+                print("  the coverage run reported nothing — every mutant runs, reached or not".yellow)
+            } else {
+                print("  measured in \(Heartbeat.format(took ?? 0))"
+                    + " — \(measured.deadFiles) file(s) with nothing running in them")
+                coverage = measured
+            }
 
             // The coverage run already built the tests, so it can say which
             // modules they are aimed at before anything is written.
@@ -106,14 +106,11 @@ struct Injection {
 
     /// Whether to run the suite with coverage on before injecting.
     ///
-    /// Asked for or refused explicitly, that is the answer. Otherwise it is
-    /// skipped for a simulator project whose tests are all Swift Testing:
+    /// Skipped for a simulator project whose tests are all Swift Testing:
     /// the probe finds unreached mutants in a minute, where the coverage run
     /// is a build and a whole suite on the simulator.
     private var measuresCoverage: Bool {
-        if let asked = scope.coverage { return asked }
-
-        let kind = harness.harness ?? Discovery.harness(in: project)
+        let kind = Discovery.harness(in: project)
         guard kind == .xcode, TestSources.allSwiftTesting(in: project) else { return true }
 
         print("  skipping the coverage run: every test is Swift Testing, so each is probed in process")
