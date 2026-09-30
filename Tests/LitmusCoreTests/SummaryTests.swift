@@ -172,6 +172,31 @@ struct SummaryScoreTests {
         #expect(Report.duration(9) == "9s")
     }
 
+    /// The coverage run happens before the mutation run starts its clock;
+    /// left out, a run of half an hour said it took ten minutes.
+    @Test("counts setup and the coverage run in how long the run took")
+    func tookWithCoverage() throws {
+        var run = MutationRun.Summary(results: summary([.killed]).results, duration: 748)
+        run.phases = MutationRun.Phases(setup: 5, coverage: 600, build: 65, baseline: 40)
+
+        #expect(run.total == 1353)
+        #expect(Report.took(run) == "took 22m 33s — setup 5s, coverage 10m 0s, build 1m 5s, launch and baseline 40s, mutants 10m 43s")
+
+        let json = try #require(
+            JSONSerialization.jsonObject(with: Data(try Report(run, run: runInfo).rendered(as: .json).utf8)) as? [String: Any]
+        )
+        #expect(json["duration"] as? Double == 1353)
+
+        let stryker = try #require(
+            JSONSerialization.jsonObject(with: Data(try Report(run, run: runInfo).rendered(as: .stryker).utf8)) as? [String: Any]
+        )
+        #expect((stryker["performance"] as? [String: Int])?["setup"] == 670_000)
+
+        // Under half a second it would read "setup 0s".
+        run.phases.setup = 0.2
+        #expect(Report.took(run)?.contains("setup") == false)
+    }
+
     @Test("puts the run and its phases in the JSON and Stryker reports")
     func runInReports() throws {
         var run = MutationRun.Summary(results: summary([.killed]).results, duration: 100)

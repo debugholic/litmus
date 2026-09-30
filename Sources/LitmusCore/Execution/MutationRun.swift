@@ -73,6 +73,10 @@ public struct MutationRun: Sendable {
         /// Running the mutants: the run's time less building and the baseline.
         public var mutantTime: TimeInterval { max(0, duration - phases.build - phases.baseline) }
 
+        /// The whole run: `duration` is only the part after the mutants were
+        /// written.
+        public var total: TimeInterval { phases.setup + phases.coverage + duration }
+
         public var killed: Int { results.count { $0.verdict == .killed } }
         public var survived: Int { results.count { $0.verdict == .survived } }
         public var timedOut: Int { results.count { $0.verdict == .timedOut } }
@@ -208,12 +212,23 @@ public struct MutationRun: Sendable {
 
     /// Where a run's time went.
     public struct Phases: Sendable, Equatable {
+        /// Copying the project and writing the mutants into it, before the
+        /// run; the coverage run is not in it.
+        public var setup: TimeInterval = 0
+        /// The coverage run, when there was one. On a project with XCTest it
+        /// can be the longest part of all.
+        public var coverage: TimeInterval = 0
         /// Building, rebuilding after a rejected mutant, and adding the driver.
         public var build: TimeInterval = 0
         /// Launching the tests, the baseline and the probe.
         public var baseline: TimeInterval = 0
 
-        public init(build: TimeInterval = 0, baseline: TimeInterval = 0) {
+        public init(
+            setup: TimeInterval = 0, coverage: TimeInterval = 0,
+            build: TimeInterval = 0, baseline: TimeInterval = 0
+        ) {
+            self.setup = setup
+            self.coverage = coverage
             self.build = build
             self.baseline = baseline
         }

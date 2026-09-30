@@ -63,9 +63,10 @@ struct Run: AsyncParsableCommand {
 
         let working: URL
         let mutants: [Mutant]
+        let coverageTook: TimeInterval
 
         do {
-            (working, mutants) = try await prepared(project)
+            (working, mutants, coverageTook) = try await prepared(project)
         } catch let nothing as NothingToMutate {
             // Not a failure and not a misuse: printing usage here would say the
             // command was typed wrong, and exiting non-zero would turn a
@@ -108,7 +109,8 @@ struct Run: AsyncParsableCommand {
         let repair = plan == nil ? BuildRepair(project: project, workingCopy: working) : nil
         let allTests = (testHarness as? Xcodebuild)?.scheme == AllTestsScheme.name
 
-        let summary = try await MutationRun(
+        let setupTook = Date().timeIntervalSince(startedAt)
+        var summary = try await MutationRun(
             configuration: .init(
                 harness: testHarness,
                 lanes: lanes,
@@ -119,6 +121,8 @@ struct Run: AsyncParsableCommand {
             ),
             progress: { Self.show($0) }
         )(check.injected)
+        summary.phases.coverage = coverageTook
+        summary.phases.setup = max(0, setupTook - coverageTook)
 
         // A plan's copy has no original beside it; its own files are what
         // there is to show.
@@ -175,16 +179,16 @@ struct Run: AsyncParsableCommand {
     /// Injecting is part of a run, not a step before it. Passing `--plan` says
     /// the work was already done — by `litmus inject`, for a copy worth looking
     /// at — and this runs that instead.
-    private func prepared(_ project: URL) async throws -> (working: URL, mutants: [Mutant]) {
+    private func prepared(_ project: URL) async throws -> (working: URL, mutants: [Mutant], coverage: TimeInterval) {
         if let plan {
             Interruption.install()
             try RunLock.acquire(for: project)
-            return (project, try Plan.read(contentsOf: URL(fileURLWithPath: plan)))
+            return (project, try Plan.read(contentsOf: URL(fileURLWithPath: plan)), 0)
         }
 
         let workingCopy = WorkingCopy.location(for: project)
 
-        let result = try await Injection(
+        let (result, coverage) = try await Injection(
             project: project,
             workingCopy: workingCopy,
             scope: scope,
@@ -196,7 +200,7 @@ struct Run: AsyncParsableCommand {
         // number alone does not say so.
         print(Injection.scopeLine(result))
 
-        return (workingCopy, result.mutants)
+        return (workingCopy, result.mutants, coverage)
     }
 
     /// Takes out what a failed build names: the mutants the compiler
