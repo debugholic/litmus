@@ -9,7 +9,7 @@ on:
 
 # Only the newest main is worth a badge; an older run still going is wasted.
 concurrency:
-  group: litmus
+  group: litmus-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -29,8 +29,32 @@ jobs:
       # the badge is for the whole tree, and should not narrow if that changes.
       - name: Run Litmus on itself
         run: |
+          set -o pipefail
           BIN=$(swift build -c release --show-bin-path)/litmus
-          "$BIN" --all --format json --output litmus.json
+          "$BIN" --all --format json --output litmus.json 2>&1 | tee litmus.log
+
+      # Litmus says the suite could not run, not why. The baseline is one
+      # `swift test --skip-build` in its working copy, so run that again where
+      # it ran and keep what it printed.
+      - name: Run the baseline again, for its log
+        if: failure()
+        run: |
+          mkdir -p diagnostics
+          cp litmus.log diagnostics/ || true
+          COPY=$(ls -dt "$HOME"/Library/Caches/litmus/*/ | head -1)
+          echo "working copy: $COPY" | tee diagnostics/baseline.log
+          swift --version >> diagnostics/baseline.log 2>&1
+          SYSTEM=$(swift build --help 2>&1 | grep -q -- '--build-system' && swift build --help 2>&1 | grep -q native && echo "--build-system native" || true)
+          (cd "$COPY" && swift test --skip-build $SYSTEM) >> diagnostics/baseline.log 2>&1 || true
+          tail -60 diagnostics/baseline.log
+
+      - name: Keep the logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: litmus-diagnostics
+          path: diagnostics/
+          retention-days: 7
 
       # The shields.io endpoint format. Colours follow the report's own
       # thresholds: 80 and up is good, under 60 bad.
@@ -51,7 +75,10 @@ jobs:
 
       # An orphan branch holding only the badge: the default token can push
       # it, and main's history is not filled with score bumps.
+      # Only main's score is the badge; a run started by hand on a branch is
+      # for its logs.
       - name: Publish to the badges branch
+        if: github.ref == 'refs/heads/main'
         run: |
           cd badge
           git init -q -b badges
