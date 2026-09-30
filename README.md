@@ -4,7 +4,7 @@
 
 <h1 align="center">Litmus</h1>
 
-<p align="center">Mutation testing for Swift.</p>
+<p align="center">Mutation testing and flaky test detection for Swift.</p>
 
 <p align="center">
   <a href="https://github.com/debugholic/litmus/actions/workflows/litmus.yml"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fdebugholic%2Flitmus%2Fbadges%2Flitmus.json" alt="Litmus score"></a>

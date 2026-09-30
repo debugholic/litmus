@@ -21,7 +21,7 @@ struct Litmus: AsyncParsableCommand {
 
     static let configuration = CommandConfiguration(
         commandName: "litmus",
-        abstract: "Mutation testing for Swift.",
+        abstract: "Mutation testing and flaky test detection for Swift.",
         version: Litmus.version,
         subcommands: [Inject.self, Run.self, Flaky.self],
         defaultSubcommand: Run.self
