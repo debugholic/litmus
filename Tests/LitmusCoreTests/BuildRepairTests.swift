@@ -174,4 +174,18 @@ struct BuildRepairTests {
 
         #expect(BuildRepair.errors(in: log).map(\.line) == [10])
     }
+
+    @Test("reads a syntax error swift build writes path last")
+    func pathLast() {
+        let log = """
+        error: /p/My Project/A.swift:227:85 consecutive statements on a line must be separated by ';': FixIt(sourceRange: SourceRange(path: "/p/My Project/A.swift", startLine: 227))
+        error: SwiftDriver LitmusCore normal arm64 failed with a nonzero exit code.
+        error: Build failed
+        """
+
+        let errors = BuildRepair.errors(in: log)
+        #expect(errors.map(\.path) == ["/p/My Project/A.swift"])
+        #expect(errors.map(\.line) == [227])
+        #expect(errors.map(\.column) == [85])
+    }
 }
