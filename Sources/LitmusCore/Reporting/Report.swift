@@ -80,6 +80,8 @@ public struct Report: Sendable {
             lines.append("mutation score \(percent(whole)) — caught of every mutant, reached or not")
         }
         lines.append(counts(summary.results))
+        // Beside the score, because it is about the score.
+        lines += failedAlone()
 
         // One file says nothing a second time; several are where the weak one
         // hides behind the average.
@@ -126,6 +128,25 @@ public struct Report: Sendable {
         if let took = Self.took(summary) { lines.append(took) }
 
         return lines.joined(separator: "\n")
+    }
+
+    /// Tests that pass in the suite and fail when run again on their own. A
+    /// mutant runs the same way, so a kill that rests on them alone may be
+    /// theirs rather than the mutant's.
+    private func failedAlone() -> [String] {
+        let tests = summary.failedAlone
+        guard !tests.isEmpty else { return [] }
+
+        var lines = ["", "\(tests.count) test(s) pass in the suite and fail when run again on their own — they depend on state left behind, or are flaky:"]
+        for test in tests.prefix(10) {
+            lines.append("  \(test.name)" + (test.file.map { "  (\($0))" } ?? ""))
+        }
+        if tests.count > 10 { lines.append("  and \(tests.count - 10) more") }
+        let unsure = summary.unsureKills.count
+        if unsure > 0 {
+            lines.append("  \(unsure) kill(s) rest on these tests alone, and may not be the mutant's doing")
+        }
+        return lines
     }
 
     /// Functions a test runs through without noticing the change, each
@@ -286,6 +307,10 @@ public struct Report: Sendable {
                     "killed": score.killed,
                 ] as [String: Any]
             },
+            "failedAlone": summary.failedAlone.map { test in
+                ["id": test.id, "name": test.name, "file": test.file as Any] as [String: Any]
+            },
+            "unsureKills": summary.unsureKills.count,
             "mutants": summary.results.sorted(by: sortedByLocation).map { result in
                 [
                     "file": result.mutant.fileName,

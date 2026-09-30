@@ -193,7 +193,7 @@ extension Xcodebuild: BatchingHarness {
                     timeouts.tests[test] = seconds
                 case let .covered(id, tests):
                     limits[id] = timeouts.mutant(running: tests)
-                case .reached, .test, .killedBy:
+                case .reached, .test, .killedBy, .failedAlone:
                     break
                 }
             }

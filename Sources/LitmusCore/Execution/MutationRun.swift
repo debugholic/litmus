@@ -70,6 +70,24 @@ public struct MutationRun: Sendable {
         /// Where the time went; the mutants had what is left of `duration`.
         public var phases = Phases()
 
+        /// Tests that passed in the suite and failed when run again on their
+        /// own, while probing: they depend on state the run left behind, or
+        /// they are flaky.
+        public var failedAlone: [TestRef] = []
+
+        /// Kills that rest on those tests alone. A mutant runs the same way,
+        /// in the same process with only the tests that reach it, so a test
+        /// that fails there without a mutant fails with one too, and the kill
+        /// may not be the mutant's doing.
+        public var unsureKills: [MutantResult] {
+            let alone = Set(failedAlone.map(\.id))
+            guard !alone.isEmpty else { return [] }
+            return results.filter { result in
+                result.verdict == .killed && !result.killedBy.isEmpty
+                    && result.killedBy.allSatisfy { alone.contains($0.id) }
+            }
+        }
+
         /// Running the mutants: the run's time less building and the baseline.
         public var mutantTime: TimeInterval { max(0, duration - phases.build - phases.baseline) }
 
@@ -234,6 +252,23 @@ public struct MutationRun: Sendable {
         }
     }
 
+    /// Tests that failed when run again on their own, from every lane's
+    /// probe.
+    private final class Apart: @unchecked Sendable {
+        private let lock = NSLock()
+        private var found: [String: TestRef] = [:]
+
+        func add(_ test: TestRef) {
+            lock.lock(); defer { lock.unlock() }
+            found[test.id] = test
+        }
+
+        var tests: [TestRef] {
+            lock.lock(); defer { lock.unlock() }
+            return found.values.sorted { ($0.name, $0.id) < ($1.name, $1.id) }
+        }
+    }
+
     private final class Clock: @unchecked Sendable {
         private let lock = NSLock()
         private var measured = Phases()
@@ -310,6 +345,7 @@ public struct MutationRun: Sendable {
     let progress: @Sendable (Step) -> Void
     /// Where the run's time went, added to as it goes.
     private let clock = Clock()
+    private let apart = Apart()
 
     public init(
         configuration: Configuration,
@@ -356,6 +392,7 @@ public struct MutationRun: Sendable {
 
         var summary = Summary(results: rejected + results, duration: Date().timeIntervalSince(started))
         summary.phases = clock.phases
+        summary.failedAlone = apart.tests
         if let scope {
             for path in Set(summary.results.map(\.mutant.filePath)) {
                 summary.modules[path] = scope.module(of: path)
@@ -580,6 +617,7 @@ public struct MutationRun: Sendable {
         progress(.checkingBaseline)
         let batchStarted = Date()
         let clock = self.clock
+        let apart = self.apart
 
         let outcomes = try await withThrowingTaskGroup(
             of: (
@@ -635,6 +673,8 @@ public struct MutationRun: Sendable {
                             names[id] = name
                         case let .timed(id, seconds):
                             times[id] = seconds
+                        case let .failedAlone(id):
+                            apart.add(TestRef(id: id, name: names[id] ?? id, duration: times[id]))
                         case let .covered(id, ids):
                             tests[id, default: ([], [])].covered = refs(ids)
                         case let .killedBy(id, ids):
