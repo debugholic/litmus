@@ -13,6 +13,8 @@ public struct FlakyReport: Sendable {
     public let asked: Int
     /// `changed since origin/main`, when only the tests a change touched ran.
     public let scope: String?
+    /// Changed tests left out for reaching nothing that can vary.
+    public let calm: [String]
     public let build: TimeInterval
     public let duration: TimeInterval
     public let run: RunInfo?
@@ -22,6 +24,7 @@ public struct FlakyReport: Sendable {
         skipped: [(target: String, reason: String)] = [],
         asked: Int,
         scope: String? = nil,
+        calm: [String] = [],
         build: TimeInterval = 0,
         duration: TimeInterval = 0,
         run: RunInfo? = nil
@@ -30,6 +33,7 @@ public struct FlakyReport: Sendable {
         self.skipped = skipped
         self.asked = asked
         self.scope = scope
+        self.calm = calm
         self.build = build
         self.duration = duration
         self.run = run
@@ -86,6 +90,11 @@ public struct FlakyReport: Sendable {
             }
         }
 
+        if !calm.isEmpty {
+            lines.append("")
+            lines.append("left out \(calm.count) changed test(s) that reach nothing that can vary: \(calm.joined(separator: ", "))")
+        }
+
         if !skipped.isEmpty {
             lines.append("")
             for (target, reason) in skipped {
@@ -130,6 +139,7 @@ public struct FlakyReport: Sendable {
         let payload: [String: Any] = [
             "suiteRuns": asked,
             "scope": scope as Any,
+            "calm": calm,
             "tests": testCount,
             "unstable": unstable.count,
             "duration": duration,

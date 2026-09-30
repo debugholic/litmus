@@ -18,6 +18,12 @@ struct Flaky: AsyncParsableCommand {
     @Flag(help: "Run every test, not only the ones this branch changed.")
     var all = false
 
+    @Flag(help: """
+    Run every changed test, not only the ones that reach something that can \
+    vary: a task, the clock, chance, shared state.
+    """)
+    var everyChanged = false
+
     @Option(help: """
     How many times to run the tests together. 100 by default for the tests a \
     change touched, which are few; 10 with --all, which runs the whole suite.
@@ -48,6 +54,10 @@ struct Flaky: AsyncParsableCommand {
         // repeating it here would be paying for that again.
         let base = all ? nil : (since ?? Discovery.defaultBase(in: project))
         var changed: ChangedLines?
+        // The changed tests that reach something that can vary; nil runs
+        // every changed test.
+        var risky: [ChangedTests.Span]?
+        var calm: [String] = []
         if let base {
             let diff = try GitDiff.changed(since: base, in: project)
             // Said before anything is built: no test file, nothing to rerun.
@@ -62,6 +72,37 @@ struct Flaky: AsyncParsableCommand {
             }
             changed = diff
             print("  tests changed since \(base)")
+
+            // Before anything is built: a test that reaches nothing that
+            // can vary comes out the same every time, and rerunning it
+            // costs a build and a launch for nothing.
+            if !everyChanged {
+                let risk = FlakyRisk(root: project)
+                var found: [ChangedTests.Span] = []
+                var lines: [String] = []
+                for path in testFiles.sorted() {
+                    let file = project.appendingPathComponent(path).path
+                    for test in ChangedTests.picked(inFile: file, changed: diff.lines(of: path)) {
+                        if let finding = risk.finding(for: test.function) {
+                            found.append(test.span)
+                            lines.append("    \(test.name) — \(finding.factor), via \(finding.path.joined(separator: " → "))")
+                        } else {
+                            calm.append(test.name)
+                        }
+                    }
+                }
+                print("  \(found.count + calm.count) changed test(s), \(found.count) reaching something that can vary:")
+                lines.forEach { print($0) }
+                if !calm.isEmpty {
+                    print("  left out, since nothing they reach can vary: \(calm.joined(separator: ", "))")
+                }
+                guard !found.isEmpty else {
+                    print("no changed test reaches anything that can vary, so none is run again.")
+                    print("Pass --every-changed to run them anyway.")
+                    return
+                }
+                risky = found
+            }
         } else {
             print("  every test")
         }
@@ -108,6 +149,7 @@ struct Flaky: AsyncParsableCommand {
             if let changed {
                 let lines = changed.rebased(onto: target.files, root: working)
                 pick = target.files.flatMap { ChangedTests.spans(ofFile: $0, changed: lines.lines(of: $0)) }
+                if let risky { pick = pick?.filter { risky.contains($0) } }
                 // A target the change did not touch needs no driver and no launch.
                 guard pick?.isEmpty == false else { continue }
             }
@@ -147,6 +189,7 @@ struct Flaky: AsyncParsableCommand {
             skipped: skipped,
             asked: runs,
             scope: base.map { "changed since \($0)" },
+            calm: calm,
             build: buildTook,
             duration: Date().timeIntervalSince(startedAt),
             run: RunInfo(

@@ -122,9 +122,9 @@ struct FlakyTests {
     }
 
     /// A helper or a suite's set-up may be what every test there leans on.
-    @Test("picks the whole file for a change outside any test, and nothing for a blank line")
+    @Test("picks every test in the file for a change outside any test, and nothing for a blank line")
     func picksFile() {
-        #expect(ChangedTests.spans(in: testFile, changed: [3]) == [1...12])
+        #expect(ChangedTests.spans(in: testFile, changed: [3]) == [6...7, 9...11])
         #expect(ChangedTests.spans(in: testFile, changed: [2]).isEmpty)
     }
 
@@ -146,6 +146,92 @@ struct FlakyTests {
         lines.forEach { grouped.read($0) }
 
         #expect(grouped.verdicts.first { $0.name == "once" }?.reasons == ["fails 1 of 2 runs together"])
+    }
+
+    private let app = """
+    final class Player {
+        var position = 0
+        func play() { Task { position += 1 } }
+        func stop() { position = 0 }
+    }
+
+    struct Clock {
+        func stamp() -> Date { Date() }
+        func fixed() -> Date { Date(timeIntervalSince1970: 0) }
+    }
+    """
+
+    private let playerTests = """
+    import Testing
+
+    @Suite struct PlayerTests {
+        @Test func plays() { let player = Player(); player.play() }
+        @Test func stops() { let player = Player(); player.stop(); #expect(player.position == 0) }
+        @Test func fixed() { #expect(Clock().fixed() == Clock().fixed()) }
+        @Test func stamps() { _ = Clock().stamp() }
+    }
+    """
+
+    /// Before anything is built: a test whose code, all the way down, has
+    /// nothing that varies need not be run again and again.
+    @Test("follows what a test calls to what can vary, and says how it got there")
+    func risk() {
+        let risk = FlakyRisk(sources: ["App.swift": app, "PlayerTests.swift": playerTests])
+        let tests = ChangedTests.picked(in: playerTests, changed: Set(1...9))
+        let found = Dictionary(uniqueKeysWithValues: tests.map { ($0.function.name.text, risk.finding(for: $0.function)) })
+
+        #expect(found["plays"]! == FlakyRisk.Finding(factor: "Task", path: ["plays()", "Player.play()"]))
+        #expect(found["stamps"]! == FlakyRisk.Finding(factor: "Date()", path: ["stamps()", "Clock.stamp()"]))
+        #expect(found["stops"]! == nil)
+        #expect(found["fixed"]! == nil)
+    }
+
+    /// A test that hands in a mock never runs the real type, however its
+    /// methods are named: following `execute()` into every type that has
+    /// one picked 75 tests of 75 on one project.
+    @Test("does not follow a method into a type the test never makes")
+    func mockKeepsRealTypeOut() {
+        let sources = [
+            "App.swift": """
+            protocol Speed { func execute() -> Double }
+            final class NetworkSpeed: Speed { func execute() -> Double { Date().timeIntervalSince1970 } }
+            final class Bookmarks {
+                let speed: Speed
+                init(speed: Speed) { self.speed = speed }
+                func add() -> Bool { speed.execute() > 1 }
+            }
+            """,
+            "Tests.swift": """
+            import Testing
+            struct FastSpeed: Speed { func execute() -> Double { 2 } }
+            @Suite struct BookmarkTests {
+                @Test func adds() { #expect(Bookmarks(speed: FastSpeed()).add()) }
+                @Test func addsForReal() { #expect(Bookmarks(speed: NetworkSpeed()).add()) }
+            }
+            """,
+        ]
+        let risk = FlakyRisk(sources: sources)
+        let tests = ChangedTests.picked(in: sources["Tests.swift"]!, changed: Set(1...6))
+        let found = Dictionary(uniqueKeysWithValues: tests.map { ($0.function.name.text, risk.finding(for: $0.function)) })
+
+        #expect(found["adds"]! == nil)
+        #expect(found["addsForReal"]??.factor == "Date()")
+    }
+
+    @Test("counts a suite's shared state against its tests")
+    func riskInSuite() {
+        let tests = """
+        import Testing
+
+        @Suite struct CounterTests {
+            static var count = 0
+            @Test func counts() { #expect(Self.count == 0) }
+        }
+        """
+        let risk = FlakyRisk(sources: ["CounterTests.swift": tests])
+        let test = ChangedTests.picked(in: tests, changed: [5])[0]
+
+        #expect(risk.finding(for: test.function)?.factor == "static var")
     }
 
     @Test("names the test a lone pass stopped in")
