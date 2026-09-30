@@ -153,4 +153,60 @@ struct StrykerReportTests {
         let listed = try #require(testFiles["ATests.swift"]?["tests"] as? [[String: String]])
         #expect(listed == [["id": reaching.id, "name": "빈 값이면 거른다"], ["id": catching.id, "name": "b()"]])
     }
+
+    // MARK: - what to read first
+
+    private func front(_ results: [MutantResult], copy: URL) -> String {
+        StrykerReport(MutationRun.Summary(results: results, duration: 0), workingCopy: copy, project: copy).front()
+    }
+
+    private func result(_ verdict: Verdict, at path: String, line: Int = 1) -> MutantResult {
+        MutantResult(
+            mutant: Mutant(
+                filePath: path, line: line, column: 1, utf8Offset: line,
+                operator: "RelationalOperatorReplacement", description: "changed == to !=",
+                change: Change(
+                    startLine: line, startColumn: 1, endLine: line, endColumn: 7,
+                    original: "a == b", replacement: "a != b", function: "f()"
+                )
+            ),
+            verdict: verdict,
+            duration: 0
+        )
+    }
+
+    /// The viewer names files under the folder they all share; a link that
+    /// kept it opened nothing.
+    @Test("links under the folder every file shares, as the viewer routes them")
+    func frontLinksDropSharedFolder() {
+        let copy = URL(fileURLWithPath: "/tmp/copy")
+        let html = front([
+            result(.noCoverage, at: "/tmp/copy/Sources/Shared/UI/KernButton.swift"),
+            result(.noCoverage, at: "/tmp/copy/Sources/Feature/A.swift"),
+        ], copy: copy)
+
+        #expect(html.contains("href=\"#mutant/Shared/UI/KernButton.swift\""))
+        #expect(!html.contains("#mutant/Sources/"))
+    }
+
+    @Test("draws no bar when the tests reach nothing, rather than a red one")
+    func frontNothingReached() {
+        let copy = URL(fileURLWithPath: "/tmp/copy")
+        let html = front([result(.noCoverage, at: "/tmp/copy/A.swift")], copy: copy)
+
+        #expect(!html.contains("class=\"bar\""))
+        #expect(html.contains("No test reaches"))
+    }
+
+    @Test("links to the file in the viewer, with the path encoded and names escaped")
+    func frontLinks() {
+        let copy = URL(fileURLWithPath: "/tmp/copy")
+        var survivor = result(.survived, at: "/tmp/copy/Feature Flags/Toggle#2.swift")
+        survivor.coveredBy = [TestRef(id: "App.T/a()/T.swift:1:1", name: "값이 <비면> 거른다")]
+        let html = front([survivor, result(.killed, at: "/tmp/copy/B.swift")], copy: copy)
+
+        #expect(html.contains("href=\"#mutant/Feature%20Flags/Toggle%232.swift\""))
+        #expect(html.contains("값이 &lt;비면&gt; 거른다"))
+        #expect(html.contains("class=\"bar\""))
+    }
 }

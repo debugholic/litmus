@@ -19,16 +19,36 @@ public struct Report: Sendable {
     /// files where the mutants say they are.
     let workingCopy: URL?
     let project: URL?
+    /// What was run, when and on what.
+    let run: RunInfo?
 
-    public init(_ summary: MutationRun.Summary, workingCopy: URL? = nil, project: URL? = nil) {
+    public init(_ summary: MutationRun.Summary, workingCopy: URL? = nil, project: URL? = nil, run: RunInfo? = nil) {
         self.summary = summary
         self.workingCopy = workingCopy
         self.project = project
+        self.run = run
     }
 
     private var stryker: StrykerReport {
         let root = workingCopy ?? URL(fileURLWithPath: "/")
-        return StrykerReport(summary, workingCopy: root, project: project ?? root)
+        return StrykerReport(summary, workingCopy: root, project: project ?? root, run: run)
+    }
+
+    /// `took 12m 28s — build 1m 5s, launch and baseline 40s, mutants 10m 43s`
+    static func took(_ summary: MutationRun.Summary) -> String? {
+        guard summary.duration > 0 else { return nil }
+        var parts: [String] = []
+        if summary.phases.build > 0 { parts.append("build \(duration(summary.phases.build))") }
+        if summary.phases.baseline > 0 { parts.append("launch and baseline \(duration(summary.phases.baseline))") }
+        if !parts.isEmpty { parts.append("mutants \(duration(summary.mutantTime))") }
+        return "took \(duration(summary.duration))" + (parts.isEmpty ? "" : " — " + parts.joined(separator: ", "))
+    }
+
+    static func duration(_ value: TimeInterval) -> String {
+        let total = Int(value.rounded())
+        if total < 60 { return "\(total)s" }
+        if total < 3600 { return "\(total / 60)m \(total % 60)s" }
+        return "\(total / 3600)h \(total % 3600 / 60)m"
     }
 
     public func rendered(as format: ReportFormat) throws -> String {
@@ -60,49 +80,101 @@ public struct Report: Sendable {
 
         // One file says nothing a second time; several are where the weak one
         // hides behind the average.
+        // A table for the whole before one per file: which module, or which
+        // part of a single module, the tests leave alone.
+        let areas = summary.areas
+        if areas.count > 1 {
+            let width = areas.map(\.name.count).max() ?? 0
+            lines.append("")
+            lines.append("by \(summary.areasAreModules ? "module" : "folder"), weakest first:")
+            for area in areas {
+                let score = area.score.map(percent) ?? "—"
+                let padded = area.name.padding(toLength: width, withPad: " ", startingAt: 0)
+                lines.append("  \(String(repeating: " ", count: max(0, 4 - score.count)))\(score)  \(padded)  \(counts(area.results))")
+            }
+        }
+
+        // Only files with a score: a file the tests never reach says nothing
+        // here, and one project listed 112 of them. They are counted below.
         let files = summary.files
-        if files.count > 1 {
-            let width = files.map(\.path.count).max() ?? 0
+        let scored = files.filter { $0.score != nil }
+        if files.count > 1, !scored.isEmpty {
+            let width = scored.map(\.path.count).max() ?? 0
             lines.append("")
             lines.append("by file, weakest first:")
-            for file in files {
+            for file in scored {
                 let score = file.score.map(percent) ?? "—"
                 let padded = file.path.padding(toLength: width, withPad: " ", startingAt: 0)
                 lines.append("  \(String(repeating: " ", count: max(0, 4 - score.count)))\(score)  \(padded)  \(counts(file.results))")
+            }
+            if files.count > scored.count {
+                lines.append("  and \(files.count - scored.count) file(s) with nothing the tests reach")
             }
         }
 
         lines += slowest()
 
-        let gaps = FunctionGap.find(in: summary.results)
-        guard !gaps.isEmpty else { return lines.joined(separator: "\n") }
+        let plan = TestPlan(summary.results)
+        lines += unchecked(plan)
+        lines += unreached(plan)
 
-        let untested = gaps.count { $0.status == .untested }
-        lines.append("")
-        lines.append("what to test — \(untested) untested, \(gaps.count - untested) partly tested:")
-
-        let kindWidth = GapKind.allCases.map(\.rawValue.count).max() ?? 0
-        for gap in gaps {
-            lines.append("")
-            lines.append("\(gap.status.rawValue.padding(toLength: 9, withPad: " ", startingAt: 0))"
-                + "\(gap.name)  \(gap.caught) of \(gap.scored) caught")
-            // Once for the function: its survivors are mostly passed by the
-            // same tests, and a line under each said the same thing again.
-            var passing: [TestRef] = []
-            for test in gap.survivors.flatMap(\.coveredBy) where !passing.contains(test) {
-                passing.append(test)
-            }
-            if let line = Self.passedThrough(by: passing) {
-                lines.append("  \(line)")
-            }
-            for survivor in gap.survivors {
-                let mutant = survivor.mutant
-                let kind = survivor.gapKind.rawValue.padding(toLength: kindWidth, withPad: " ", startingAt: 0)
-                lines.append("  \(location(of: survivor))  \(kind)  \(Self.what(mutant))")
-            }
-        }
+        // Last: what the numbers above were measured on.
+        if let run { lines += ["", "run \(run.line)"] }
+        if let took = Self.took(summary) { lines.append(took) }
 
         return lines.joined(separator: "\n")
+    }
+
+    /// Functions a test runs through without noticing the change, each
+    /// survivor in full: the tests are there, and a check is what is missing.
+    private func unchecked(_ plan: TestPlan) -> [String] {
+        guard !plan.unchecked.isEmpty else { return [] }
+
+        let untested = plan.unchecked.count { $0.gap.status == .untested }
+        var lines = ["", "what to test — \(untested) untested, \(plan.unchecked.count - untested) partly tested:"]
+
+        let kindWidth = GapKind.allCases.map(\.rawValue.count).max() ?? 0
+        for group in plan.groups {
+            lines.append("")
+            lines.append(group.owner + (Self.passedThrough(by: group.passedBy).map { " — \($0)" } ?? ""))
+            for entry in group.entries {
+                let gap = entry.gap
+                let member = TestPlan.split(gap.name).member ?? gap.name
+                lines.append("  \(gap.status.rawValue.padding(toLength: 9, withPad: " ", startingAt: 0))"
+                    + "\(member)  \(gap.caught) of \(gap.scored) caught")
+                for survivor in gap.survivors {
+                    let kind = survivor.gapKind.rawValue.padding(toLength: kindWidth, withPad: " ", startingAt: 0)
+                    lines.append("    \(location(of: survivor))  \(kind)  \(Self.what(survivor.mutant))")
+                }
+                if entry.unreached > 0 {
+                    lines.append("    and \(entry.unreached) more in it no test reaches")
+                }
+            }
+        }
+        return lines
+    }
+
+    /// Code no test runs, counted by file: listed mutant by mutant it was
+    /// thousands of lines that all said the same thing.
+    private func unreached(_ plan: TestPlan) -> [String] {
+        guard !plan.unreached.isEmpty else { return [] }
+
+        let root = MutationRun.Summary.commonDirectory(of: summary.results.map(\.mutant.filePath))
+        let shown = plan.unreached.prefix(10)
+        let width = String(shown.first?.count ?? 0).count
+
+        var lines = [
+            "",
+            "no test reaches — \(plan.unreachedTotal) mutant(s) in \(plan.unreached.count) file(s), most first:",
+        ]
+        for file in shown {
+            let path = root.isEmpty ? file.path : String(file.path.dropFirst(root.count))
+            lines.append("  \(String(repeating: " ", count: max(0, width - String(file.count).count)))\(file.count)  \(path)")
+        }
+        if plan.unreached.count > shown.count {
+            lines.append("  and \(plan.unreached.count - shown.count) more file(s)")
+        }
+        return lines
     }
 
     /// The five tests that cost the run most, when the probe timed them.
@@ -114,15 +186,15 @@ public struct Report: Sendable {
 
         var lines = ["", "slowest tests — each runs once for every mutant it reaches:"]
         for score in timed {
-            let cost = seconds(score.cost ?? 0)
-            let each = seconds(score.test.duration ?? 0)
+            let cost = Self.seconds(score.cost ?? 0)
+            let each = Self.seconds(score.test.duration ?? 0)
             lines.append("  \(String(repeating: " ", count: max(0, 7 - cost.count)))\(cost)"
                 + "  \(each) × \(score.reached)  \(score.test.name)")
         }
         return lines
     }
 
-    private func seconds(_ value: TimeInterval) -> String {
+    static func seconds(_ value: TimeInterval) -> String {
         value < 10 ? String(format: "%.1fs", value) : "\(Int(value.rounded()))s"
     }
 
@@ -165,6 +237,17 @@ public struct Report: Sendable {
             "unviable": summary.unviable,
             "error": summary.errored,
             "duration": summary.duration,
+            "run": [
+                "date": run.map { ISO8601DateFormatter().string(from: $0.date) } as Any,
+                "commit": run?.commit as Any,
+                "branch": run?.branch as Any,
+                "version": run?.version as Any,
+                "operators": run?.operators as Any,
+                "harness": run?.harness as Any,
+                "build": summary.phases.build,
+                "baseline": summary.phases.baseline,
+                "mutants": summary.mutantTime,
+            ] as [String: Any],
             "files": summary.files.map { file in
                 [
                     "path": file.path,
@@ -174,6 +257,19 @@ public struct Report: Sendable {
                     "timeout": file.count(.timedOut),
                     "unviable": file.count(.unviable),
                     "error": file.count(.error),
+                ] as [String: Any]
+            },
+            "areas": summary.areas.map { area in
+                [
+                    "name": area.name,
+                    "kind": summary.areasAreModules ? "module" : "folder",
+                    "score": area.score as Any,
+                    "killed": area.count(.killed),
+                    "survived": area.count(.survived),
+                    "timeout": area.count(.timedOut),
+                    "noCoverage": area.count(.noCoverage),
+                    "unviable": area.count(.unviable),
+                    "error": area.count(.error),
                 ] as [String: Any]
             },
             "tests": summary.tests.map { score in

@@ -58,6 +58,7 @@ struct Run: AsyncParsableCommand {
     var failUnderMutationScore: Double?
 
     func run() async throws {
+        let startedAt = Date()
         let project = URL(fileURLWithPath: project).standardizedFileURL
 
         let working: URL
@@ -121,7 +122,17 @@ struct Run: AsyncParsableCommand {
 
         // A plan's copy has no original beside it; its own files are what
         // there is to show.
-        let report = Report(summary, workingCopy: working, project: plan == nil ? project : working)
+        let git = RunInfo.git(in: project)
+        let width = "\(lanes.count) \(testHarness.laneNoun)\(lanes.count == 1 ? "" : "s")"
+        let run = RunInfo(
+            date: startedAt,
+            commit: git.commit,
+            branch: git.branch,
+            version: Litmus.version,
+            operators: SchemataInjector().operators,
+            harness: (testHarness as? Xcodebuild).map { "xcode, scheme \($0.scheme), \(width)" } ?? "swift test, \(width)"
+        )
+        let report = Report(summary, workingCopy: working, project: plan == nil ? project : working, run: run)
         let rendered = try report.rendered(as: format)
 
         if let output {

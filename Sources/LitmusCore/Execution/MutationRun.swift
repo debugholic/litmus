@@ -64,6 +64,14 @@ public struct MutationRun: Sendable {
     public struct Summary: Sendable {
         public let results: [MutantResult]
         public let duration: TimeInterval
+        /// The module each mutated file was compiled into, when the build
+        /// said; see `areas`.
+        public var modules: [String: String] = [:]
+        /// Where the time went; the mutants had what is left of `duration`.
+        public var phases = Phases()
+
+        /// Running the mutants: the run's time less building and the baseline.
+        public var mutantTime: TimeInterval { max(0, duration - phases.build - phases.baseline) }
 
         public var killed: Int { results.count { $0.verdict == .killed } }
         public var survived: Int { results.count { $0.verdict == .survived } }
@@ -130,6 +138,31 @@ public struct MutationRun: Sendable {
             return Double(caught) / Double(scored) * 100
         }
 
+        /// A score for each module, or, when everything is in one, for each
+        /// top-level folder under the files' common root: one row for one
+        /// module says nothing a second time. Weakest first, those with no
+        /// score last.
+        /// Whether `areas` are modules rather than folders.
+        public var areasAreModules: Bool {
+            Set(results.compactMap { modules[$0.mutant.filePath] }).count > 1
+        }
+
+        public var areas: [AreaScore] {
+            let named = Set(results.compactMap { modules[$0.mutant.filePath] })
+            let root = Self.commonDirectory(of: results.map(\.mutant.filePath))
+
+            func area(of result: MutantResult) -> String {
+                if named.count > 1, let module = modules[result.mutant.filePath] { return module }
+                let relative = root.isEmpty ? result.mutant.filePath : String(result.mutant.filePath.dropFirst(root.count))
+                let parts = relative.split(separator: "/")
+                return parts.count > 1 ? String(parts[0]) : "(root)"
+            }
+
+            return Dictionary(grouping: results, by: area)
+                .map { AreaScore(name: $0.key, results: $0.value) }
+                .sorted { ($0.score ?? 101, $0.name) < ($1.score ?? 101, $1.name) }
+        }
+
         /// Every test that reached a mutant, costliest first.
         public var tests: [TestScore] {
             var byID: [String: (test: TestRef, reached: Int, killed: Int)] = [:]
@@ -171,6 +204,44 @@ public struct MutationRun: Sendable {
         /// What the test costs the run: its time once for every mutant it
         /// reaches.
         public var cost: TimeInterval? { test.duration.map { $0 * Double(reached) } }
+    }
+
+    /// Where a run's time went.
+    public struct Phases: Sendable, Equatable {
+        /// Building, rebuilding after a rejected mutant, and adding the driver.
+        public var build: TimeInterval = 0
+        /// Launching the tests, the baseline and the probe.
+        public var baseline: TimeInterval = 0
+
+        public init(build: TimeInterval = 0, baseline: TimeInterval = 0) {
+            self.build = build
+            self.baseline = baseline
+        }
+    }
+
+    private final class Clock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var measured = Phases()
+
+        func add(build: TimeInterval = 0, baseline: TimeInterval = 0) {
+            lock.lock(); defer { lock.unlock() }
+            measured.build += build
+            measured.baseline += baseline
+        }
+
+        var phases: Phases {
+            lock.lock(); defer { lock.unlock() }
+            return measured
+        }
+    }
+
+    /// A module, or a top-level folder, and its mutants.
+    public struct AreaScore: Sendable {
+        public let name: String
+        public let results: [MutantResult]
+
+        public var score: Double? { Summary.score(results) }
+        public func count(_ verdict: Verdict) -> Int { results.count { $0.verdict == verdict } }
     }
 
     public struct FileScore: Sendable {
@@ -222,6 +293,8 @@ public struct MutationRun: Sendable {
 
     let configuration: Configuration
     let progress: @Sendable (Step) -> Void
+    /// Where the run's time went, added to as it goes.
+    private let clock = Clock()
 
     public init(
         configuration: Configuration,
@@ -237,7 +310,9 @@ public struct MutationRun: Sendable {
 
         progress(.building)
         var mutants = mutants
+        let buildStarted = Date()
         let (built, unviable) = try await build(&mutants)
+        clock.add(build: Date().timeIntervalSince(buildStarted))
 
         // A mutant in code these tests never look at survives whatever it
         // does, and each one costs a full run to prove it.
@@ -264,7 +339,14 @@ public struct MutationRun: Sendable {
             results = try await runWholeSuite(mutants, built: built)
         }
 
-        return Summary(results: rejected + results, duration: Date().timeIntervalSince(started))
+        var summary = Summary(results: rejected + results, duration: Date().timeIntervalSince(started))
+        summary.phases = clock.phases
+        if let scope {
+            for path in Set(summary.results.map(\.mutant.filePath)) {
+                summary.modules[path] = scope.module(of: path)
+            }
+        }
+        return summary
     }
 
     /// Builds, taking out whatever the compiler rejects until the rest builds.
@@ -345,6 +427,7 @@ public struct MutationRun: Sendable {
         }
 
         let duration = Date().timeIntervalSince(started)
+        clock.add(baseline: duration)
         progress(.baselinePassed(duration))
 
         // Measured on a whole launch, like every run after it, so ten times
@@ -378,7 +461,9 @@ public struct MutationRun: Sendable {
         var plan: Batch.Plan?
         if let batching, !batchable.isEmpty {
             progress(.preparingBatch(targets: batchable.count))
+            let prepared = Date()
             plan = try await batching.prepareBatch(built, targets: batchable, lane: configuration.lanes[0])
+            clock.add(build: Date().timeIntervalSince(prepared))
         }
         let runnable = plan?.built ?? built
 
@@ -478,6 +563,8 @@ public struct MutationRun: Sendable {
         }
 
         progress(.checkingBaseline)
+        let batchStarted = Date()
+        let clock = self.clock
 
         let outcomes = try await withThrowingTaskGroup(
             of: (
@@ -498,6 +585,15 @@ public struct MutationRun: Sendable {
                 let lead = index == 0
 
                 group.addTask {
+                    // Until the first mutant starts on the first lane: the
+                    // launch, the baseline and the probe.
+                    var readied = false
+                    func ready() {
+                        guard lead, !readied else { return }
+                        readied = true
+                        clock.add(baseline: Date().timeIntervalSince(batchStarted))
+                    }
+                    defer { ready() }
                     var durations: [String: TimeInterval] = [:]
                     var reached: Set<String> = []
                     var probed = false
@@ -531,7 +627,10 @@ public struct MutationRun: Sendable {
                         case let .finished(Batch.baseline, verdict, duration):
                             if lead, verdict == .survived { progress(.baselinePassed(duration)) }
                         case let .started(id):
-                            if let mutant = byID[id] { progress(.started(mutant)) }
+                            if let mutant = byID[id] {
+                                ready()
+                                progress(.started(mutant))
+                            }
                         case let .finished(id, verdict, duration):
                             guard let mutant = byID[id] else { return }
                             durations[id] = duration

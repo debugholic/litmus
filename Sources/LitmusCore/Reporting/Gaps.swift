@@ -98,3 +98,94 @@ public struct FunctionGap: Sendable {
             }
     }
 }
+
+/// What to test, in the order worth reading it.
+///
+/// A mutant no test reaches and one a test runs through without noticing
+/// are different news. Listed together, one project's report named 702
+/// functions over 3,700 lines, and the dozen whose tests run but check
+/// nothing were somewhere in the middle. Those come first, in full; code no
+/// test reaches is counted by file.
+public struct TestPlan: Sendable {
+    /// A function a test runs through where a change went unnoticed.
+    public struct Entry: Sendable {
+        /// With only the survivors a test ran through.
+        public let gap: FunctionGap
+        /// The tests that ran through them, each once, in the order met.
+        public let passedBy: [TestRef]
+        /// Its other mutants, the ones no test reaches.
+        public let unreached: Int
+    }
+
+    /// Untested ones first.
+    public let unchecked: [Entry]
+    /// Mutants no test reaches, by file, most first.
+    public let unreached: [(path: String, count: Int)]
+
+    public init(_ results: [MutantResult]) {
+        unchecked = FunctionGap.find(in: results).compactMap { gap in
+            let survived = gap.survivors.filter { $0.verdict == .survived }
+            guard !survived.isEmpty else { return nil }
+
+            var passedBy: [TestRef] = []
+            for test in survived.flatMap(\.coveredBy) where !passedBy.contains(where: { $0.id == test.id }) {
+                passedBy.append(test)
+            }
+            return Entry(
+                gap: FunctionGap(
+                    filePath: gap.filePath,
+                    name: gap.name,
+                    caught: gap.caught,
+                    scored: gap.caught + survived.count,
+                    survivors: survived
+                ),
+                passedBy: passedBy,
+                unreached: gap.survivors.count - survived.count
+            )
+        }
+
+        unreached = Dictionary(grouping: results.filter { $0.verdict == .noCoverage }, by: \.mutant.filePath)
+            .map { (path: $0.key, count: $0.value.count) }
+            .sorted { ($0.count, $1.path) > ($1.count, $0.path) }
+    }
+
+    public var unreachedTotal: Int { unreached.reduce(0) { $0 + $1.count } }
+
+    /// The functions of one type, and the tests that ran through any of them.
+    public struct Group: Sendable {
+        /// The type, or the name code outside one goes by.
+        public let owner: String
+        public let entries: [Entry]
+        public let passedBy: [TestRef]
+    }
+
+    /// `unchecked`, by type, in the order their first function comes. A
+    /// view model's nine properties each came with the same nine tests
+    /// named under it; by type they are named once.
+    public var groups: [Group] {
+        var order: [String] = []
+        var byOwner: [String: [Entry]] = [:]
+        for entry in unchecked {
+            let owner = Self.split(entry.gap.name).owner
+            if byOwner[owner] == nil { order.append(owner) }
+            byOwner[owner, default: []].append(entry)
+        }
+
+        return order.map { owner in
+            let entries = byOwner[owner] ?? []
+            var passedBy: [TestRef] = []
+            for test in entries.flatMap(\.passedBy) where !passedBy.contains(where: { $0.id == test.id }) {
+                passedBy.append(test)
+            }
+            return Group(owner: owner, entries: entries, passedBy: passedBy)
+        }
+    }
+
+    /// `Type.member(label:)` into the type and the member; a name with no
+    /// type in it is its own owner, with no member.
+    public static func split(_ name: String) -> (owner: String, member: String?) {
+        let head = name.firstIndex(of: "(").map { name[..<$0] } ?? name[...]
+        guard let dot = head.lastIndex(of: "."), dot != head.startIndex else { return (name, nil) }
+        return (String(name[..<dot]), String(name[name.index(after: dot)...]))
+    }
+}

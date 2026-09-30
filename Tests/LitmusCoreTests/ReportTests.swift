@@ -196,7 +196,9 @@ struct ReportTests {
         ).rendered(as: .html)
 
         #expect(rendered.contains("changed <\\/script> to x"))
-        // One for the viewer's tag, one for the report's.
-        #expect(rendered.components(separatedBy: "</script>").count == 3)
+        // The viewer's tag, the report's, and the page's own.
+        #expect(rendered.components(separatedBy: "</script>").count == 4)
+        #expect(rendered.contains("Show details"))
+        #expect(rendered.contains("href=\"#summary\""))
     }
 }

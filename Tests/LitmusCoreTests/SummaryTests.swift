@@ -89,4 +89,105 @@ struct SummaryScoreTests {
         #expect(MutationRun.Summary.commonDirectory(of: ["/p/A/x.swift", "/p/A/y.swift"]) == "/p/A/")
         #expect(MutationRun.Summary.commonDirectory(of: []) == "")
     }
+
+    private func result(_ verdict: Verdict, at path: String) -> MutantResult {
+        MutantResult(
+            mutant: Mutant(
+                filePath: path, line: 1, column: 1, utf8Offset: 0,
+                operator: "ChangeLogicalConnector", description: "changed && to ||"
+            ),
+            verdict: verdict,
+            duration: 0
+        )
+    }
+
+    @Test("scores each module when the build named more than one")
+    func areasByModule() {
+        var run = MutationRun.Summary(results: [
+            result(.killed, at: "/p/Features/Login/Sources/A.swift"),
+            result(.survived, at: "/p/Features/Login/Sources/B.swift"),
+            result(.survived, at: "/p/Core/Network/Sources/C.swift"),
+        ], duration: 0)
+        run.modules = [
+            "/p/Features/Login/Sources/A.swift": "FeatureLogin",
+            "/p/Features/Login/Sources/B.swift": "FeatureLogin",
+            "/p/Core/Network/Sources/C.swift": "CoreNetwork",
+        ]
+
+        #expect(run.areasAreModules)
+        #expect(run.areas.map(\.name) == ["CoreNetwork", "FeatureLogin"])
+        #expect(run.areas.map(\.score) == [0, 50])
+    }
+
+    /// One row for one module says nothing; its folders do.
+    @Test("scores each top-level folder when everything is one module")
+    func areasByFolder() {
+        var run = MutationRun.Summary(results: [
+            result(.killed, at: "/p/Sources/Domain/A.swift"),
+            result(.noCoverage, at: "/p/Sources/Feature/B.swift"),
+            result(.survived, at: "/p/Sources/Feature/C.swift"),
+            result(.killed, at: "/p/Sources/Root.swift"),
+        ], duration: 0)
+        run.modules = Dictionary(uniqueKeysWithValues: run.results.map { ($0.mutant.filePath, "App") })
+
+        #expect(!run.areasAreModules)
+        #expect(Set(run.areas.map(\.name)) == ["Domain", "Feature", "(root)"])
+        #expect(run.areas.first?.name == "Feature")
+    }
+
+    @Test("plain report puts the area table above the file table")
+    func plainAreas() throws {
+        let run = MutationRun.Summary(results: [
+            result(.killed, at: "/p/Sources/Domain/A.swift"),
+            result(.survived, at: "/p/Sources/Feature/B.swift"),
+        ], duration: 0)
+        let rendered = try Report(run).rendered(as: .plain)
+
+        #expect(rendered.contains("by folder, weakest first:"))
+        let area = try #require(rendered.range(of: "by folder"))
+        let file = try #require(rendered.range(of: "by file"))
+        #expect(area.lowerBound < file.lowerBound)
+    }
+
+    // MARK: - run info
+
+    private var runInfo: RunInfo {
+        RunInfo(
+            date: Date(timeIntervalSince1970: 0), commit: "a1b2c3d", branch: "main", version: "0.4.0",
+            operators: ["NegateCondition"], harness: "xcode, scheme App, 1 simulator"
+        )
+    }
+
+    @Test("says how long each part of the run took, and what it ran on")
+    func tookAndRun() throws {
+        var run = summary([.killed, .survived])
+        run = MutationRun.Summary(results: run.results, duration: 748)
+        run.phases = MutationRun.Phases(build: 65, baseline: 40)
+
+        let rendered = try Report(run, run: runInfo).rendered(as: .plain)
+
+        #expect(rendered.contains("took 12m 28s — build 1m 5s, launch and baseline 40s, mutants 10m 43s"))
+        #expect(rendered.contains("a1b2c3d on main · litmus 0.4.0 · xcode, scheme App, 1 simulator"))
+        #expect(Report.duration(3700) == "1h 1m")
+        #expect(Report.duration(9) == "9s")
+    }
+
+    @Test("puts the run and its phases in the JSON and Stryker reports")
+    func runInReports() throws {
+        var run = MutationRun.Summary(results: summary([.killed]).results, duration: 100)
+        run.phases = MutationRun.Phases(build: 10, baseline: 20)
+
+        let json = try #require(
+            JSONSerialization.jsonObject(with: Data(try Report(run, run: runInfo).rendered(as: .json).utf8)) as? [String: Any]
+        )
+        let info = try #require(json["run"] as? [String: Any])
+        #expect(info["commit"] as? String == "a1b2c3d")
+        #expect(info["mutants"] as? Double == 70)
+
+        let stryker = try #require(
+            JSONSerialization.jsonObject(with: Data(try Report(run, run: runInfo).rendered(as: .stryker).utf8)) as? [String: Any]
+        )
+        #expect((stryker["framework"] as? [String: Any])?["version"] as? String == "0.4.0")
+        #expect(stryker["performance"] as? [String: Int] == ["setup": 10000, "initialRun": 20000, "mutation": 70000])
+    }
 }
