@@ -23,7 +23,7 @@ struct Litmus: AsyncParsableCommand {
         commandName: "litmus",
         abstract: "Mutation testing for Swift.",
         version: Litmus.version,
-        subcommands: [Inject.self, Run.self],
+        subcommands: [Inject.self, Run.self, Flaky.self],
         defaultSubcommand: Run.self
     )
 }

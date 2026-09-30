@@ -323,7 +323,11 @@ public enum Batch {
     /// Adds the driver to the first file of the target that imports Testing.
     ///
     /// Written by replacing the file, never in place.
-    static func appendDriver(to target: TestedScope.TestTarget) throws {
+    static func appendDriver(
+        to target: TestedScope.TestTarget,
+        source driver: String = Batch.driver,
+        named name: String = driverClass
+    ) throws {
         guard let file = target.files.first(where: {
             (try? String(contentsOfFile: $0, encoding: .utf8))?.contains("import Testing") == true
         }) else {
@@ -331,7 +335,7 @@ public enum Batch {
         }
 
         let source = try String(contentsOfFile: file, encoding: .utf8)
-        guard !source.contains(driverClass) else { return }
+        guard !source.contains(name) else { return }
 
         try (source + driver).write(toFile: file, atomically: true, encoding: .utf8)
     }
@@ -356,6 +360,11 @@ extension Batch {
         }
 
         mutating func read() -> [Event] {
+            lines().compactMap(Self.parse)
+        }
+
+        /// The lines written since the last read.
+        mutating func lines() -> [String] {
             guard let handle = try? FileHandle(forReadingFrom: url) else { return [] }
             defer { try? handle.close() }
 
@@ -364,13 +373,12 @@ extension Batch {
             offset += UInt64(data.count)
             pending += String(decoding: data, as: UTF8.self)
 
-            var events: [Event] = []
+            var lines: [String] = []
             while let newline = pending.firstIndex(of: "\n") {
-                let line = String(pending[..<newline])
+                lines.append(String(pending[..<newline]))
                 pending = String(pending[pending.index(after: newline)...])
-                if let event = Self.parse(line) { events.append(event) }
             }
-            return events
+            return lines
         }
 
         static func parse(_ line: String) -> Event? {
