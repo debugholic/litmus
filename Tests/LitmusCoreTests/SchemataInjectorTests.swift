@@ -30,6 +30,46 @@ struct SchemataInjectorTests {
         #expect(isValidSwift(result.source))
     }
 
+    /// Taking the semicolon into the guard left two statements on a line
+    /// with nothing between them, and a whole-tree run did not build.
+    @Test("keeps a semicolon after a statement it guards")
+    func semicolonStaysOutside() {
+        let result = inject("""
+        import Foundation
+        final class Box {
+            let lock = NSLock()
+            var value = 0
+            func read() -> Int {
+                lock.lock(); defer { lock.unlock() }
+                return value
+            }
+        }
+        """)
+
+        #expect(result.mutants.contains { $0.operator == "RemoveSideEffects" })
+        #expect(isValidSwift(result.source))
+        #expect(result.source.contains("lock.lock() }; defer"))
+    }
+
+    /// Beside an operator left as written, a call that lost the space after
+    /// it made `+` a postfix operator: `…skipped)+ separate`.
+    @Test("keeps the spaces around an operator it calls, next to one it copies")
+    func spacesAroundCall() {
+        let source = """
+        func all(_ results: [Int], _ skipped: [Int], _ separate: [Int]) -> [Int] {
+            return results + skipped + separate
+        }
+        """
+        let first = inject(source)
+        let plus = first.mutants.filter { $0.operator == "ChangeArithmeticOperator" }.sorted { $0.column < $1.column }
+        #expect(plus.count == 2)
+
+        let result = SchemataInjector().inject(source: source, path: "/tmp/Sample.swift", copied: [plus[1].switchName])
+
+        #expect(isValidSwift(result.source))
+        #expect(!result.source.contains(")+ "))
+    }
+
     @Test("guards the mutation behind the environment")
     func wrapsInSwitch() {
         let result = inject("""
