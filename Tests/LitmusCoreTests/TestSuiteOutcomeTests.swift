@@ -29,6 +29,25 @@ struct TestSuiteOutcomeTests {
         #expect(TestSuiteOutcome(log: log, status: 0).verdict == .survived)
     }
 
+    /// Swift 6.1 names no suites in its summary, and SwiftPM prints XCTest's
+    /// empty one beside it.
+    @Test("reads a swift-testing summary that names no suites")
+    func swiftTestingWithoutSuites() {
+        let passed = """
+        Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.002) seconds
+        ◇ Test run started.
+        ✔ Test run with 302 tests passed after 11.145 seconds.
+        """
+        let failed = """
+        Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.002) seconds
+        ◇ Test run started.
+        ✘ Test run with 302 tests failed after 11.1 seconds with 1 issue.
+        """
+
+        #expect(TestSuiteOutcome(log: passed, status: 0).verdict == .survived)
+        #expect(TestSuiteOutcome(log: failed, status: 1).verdict == .killed)
+    }
+
     @Test("an XCTest run with failures killed the mutant")
     func xctestFailure() {
         let log = "Executed 40 tests, with 2 failures (0 unexpected) in 1.2 seconds"

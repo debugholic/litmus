@@ -76,8 +76,12 @@ struct TestSuiteOutcome {
         var found = false
 
         // swift-testing: Test run with 73 tests in 9 suites passed after ...
+        //
+        // Swift 6.1 leaves the suites out: "Test run with 73 tests passed".
+        // Missing that line left only XCTest's empty "Executed 0 tests", and
+        // a baseline that passed read as a suite that could not run.
         if let range = log.range(
-            of: #"Test run with \d+ tests? in \d+ suites? (?:passed|failed)"#,
+            of: #"Test run with \d+ tests?(?: in \d+ suites?)? (?:passed|failed)"#,
             options: .regularExpression
         ) {
             if log[range].contains("failed") { return true }
