@@ -6,7 +6,7 @@ let package = Package(
   name: "litmus",
   platforms: [.macOS(.v13)],
   products: [
-    .executable(name: "litmus", targets: ["litmus"]),
+    .executable(name: "litmus", targets: ["LitmusCLI"]),
   ],
   dependencies: [
     // 스키마타 주입에 쓴다. Swift 릴리스를 따라가야 하는 유일한 의존성이다.
@@ -28,7 +28,7 @@ let package = Package(
       ]
     ),
     .executableTarget(
-      name: "litmus",
+      name: "LitmusCLI",
       dependencies: [
         "LitmusCore",
         .product(name: "ArgumentParser", package: "swift-argument-parser"),

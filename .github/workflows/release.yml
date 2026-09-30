@@ -40,11 +40,11 @@ jobs:
           set -euo pipefail
           V="${{ steps.version.outputs.tag }}"
           sed -i '' "s/static let version = \".*\"/static let version = \"${V#v}\"/" \
-            Sources/litmus/Litmus.swift
+            Sources/LitmusCLI/Litmus.swift
 
           # Checked, because a rename would leave the sed matching nothing and
           # ship a binary that calls itself "dev" without a word.
-          grep -q "static let version = \"${V#v}\"" Sources/litmus/Litmus.swift \
+          grep -q "static let version = \"${V#v}\"" Sources/LitmusCLI/Litmus.swift \
             || { echo "::error::the version stamp did not apply"; exit 1; }
 
       - name: Build
