@@ -195,6 +195,24 @@ struct Flaky: AsyncParsableCommand {
             print("\n" + rendered)
         }
 
+        // In GitHub Actions, the summary on the job's page and each test
+        // that is not stable on the line it is declared.
+        if let step = GitHubActions.current() {
+            let copy = working.resolvingSymlinksInPath().path + "/"
+            var files: [String: String] = [:]
+            for (target, _) in targets {
+                for file in target.files {
+                    let resolved = URL(fileURLWithPath: file).resolvingSymlinksInPath().path
+                    guard resolved.hasPrefix(copy) else { continue }
+                    files[URL(fileURLWithPath: file).lastPathComponent] = project
+                        .appendingPathComponent(String(resolved.dropFirst(copy.count))).path
+                }
+            }
+            let github = report.github(files: files, workspace: step.workspace)
+            try GitHubActions.append(github.summary, to: step)
+            github.annotations.forEach { print($0) }
+        }
+
         // After the report, so a failing run still leaves it to read. A test
         // whose result changes is what this command is for, so finding one
         // fails the pipeline without being asked to.

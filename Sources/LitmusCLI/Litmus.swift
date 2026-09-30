@@ -150,6 +150,14 @@ struct Run: AsyncParsableCommand {
         )
         print("\n  report: \(Self.link(to: html))")
 
+        // In GitHub Actions, the summary on the job's page and the
+        // survivors on the lines of the pull request.
+        if let step = GitHubActions.current() {
+            let github = report.github(workspace: step.workspace)
+            try GitHubActions.append(github.summary, to: step)
+            github.annotations.forEach { print($0) }
+        }
+
         // After the reports, so a failing run still leaves them to read.
         let shortfalls = summary.shortfalls(testStrength: failUnder, mutationScore: nil)
         if !shortfalls.isEmpty {
