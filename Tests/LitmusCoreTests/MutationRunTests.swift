@@ -710,6 +710,26 @@ struct MutationRunTests {
         #expect(summary.results.count == 8)
     }
 
+    /// Swift 6.4's `swift build` names one file's rejections a build, so a
+    /// round per file is how the repair gets there, however many that is.
+    @Test("keeps building while the repair takes mutants out, past five rounds")
+    func removalsDoNotCount() async throws {
+        let mutants = (1...8).map(mutant)
+        let harness = RejectingHarness(rejecting: Set(mutants.map(\.switchName)))
+        let remaining = Remaining(mutants)
+
+        let summary = try await MutationRun(
+            configuration: .init(harness: harness, lanes: ["a"], repair: { _, _ in
+                let next = remaining.take()
+                harness.accept([next.switchName])
+                return .removed([next])
+            })
+        )(mutants)
+
+        #expect(harness.builds == 9)
+        #expect(summary.unviable == 8)
+    }
+
     @Test("stops when the repair cannot tell which mutant broke the build")
     func unrepairable() async {
         let harness = RejectingHarness(rejecting: ["x"])
@@ -718,6 +738,19 @@ struct MutationRunTests {
             try await MutationRun(
                 configuration: .init(harness: harness, lanes: ["a"], repair: { _, _ in .removed([]) })
             )([mutant(1)])
+        }
+    }
+
+    private final class Remaining: @unchecked Sendable {
+        private let lock = NSLock()
+        private var left: [Mutant]
+
+        init(_ mutants: [Mutant]) { left = mutants }
+
+        func take() -> Mutant {
+            lock.lock()
+            defer { lock.unlock() }
+            return left.removeFirst()
         }
     }
 

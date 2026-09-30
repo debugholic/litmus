@@ -62,6 +62,38 @@ struct HarnessTests {
         #expect(output.status == 0)
     }
 
+    /// `--skip-build` looks for the products where its own build system put
+    /// them, so the run has to name the same one the build did.
+    @Test("runs the tests with the build system it built them with")
+    func swiftPackageBuildSystem() async throws {
+        let tool = try FakeTool()
+        let package = SwiftPackage(
+            executable: tool.path,
+            workingDirectory: workingDirectory,
+            buildSystem: ["--build-system", "native"]
+        )
+
+        let output = try await package.test(BuiltTests(), lane: "worker 1", switchOn: nil)
+
+        #expect(output.log.contains("ARGS: test --skip-build --build-system native"))
+    }
+
+    @Test("reads a path past the native build system's deprecation warning")
+    func swiftPackagePathAfterWarning() {
+        let output = """
+        warning: '--build-system native' has been deprecated and will be removed in a future release
+        /p/.build/arm64-apple-macosx/debug
+
+        """
+        #expect(SwiftPackage.lastLine(of: output) == "/p/.build/arm64-apple-macosx/debug")
+    }
+
+    @Test("names no build system a toolchain does not list")
+    func swiftPackageNoBuildSystem() throws {
+        let tool = try FakeTool(printing: "USAGE: swift build <options>")
+        #expect(SwiftPackage.nativeBuildSystem(executable: tool.path).isEmpty)
+    }
+
     /// There is no runner in between here, so the variable goes straight onto
     /// the test process rather than through a `TEST_RUNNER_` prefix.
     @Test("puts the mutant's variable on the test process itself")

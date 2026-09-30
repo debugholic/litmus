@@ -403,9 +403,10 @@ public struct MutationRun: Sendable {
 
     /// Builds, taking out whatever the compiler rejects until the rest builds.
     ///
-    /// Bounded, because each round is a build: a repair that keeps finding
-    /// something new is not converging, and the log says why better than
-    /// another attempt would.
+    /// A round that takes a mutant out, or moves one back to a copy, is
+    /// progress there is only so much of. The rounds that do neither — a test
+    /// target left out — are bounded, because each is a build and a repair
+    /// that keeps finding something new is not converging.
     private func build(_ mutants: inout [Mutant]) async throws -> (BuiltTests, [Mutant]) {
         var unviable: [Mutant] = []
         var rounds = 0
@@ -428,7 +429,10 @@ public struct MutationRun: Sendable {
                     guard moves <= mutants.count else { throw failure }
                     continue
                 case let .removed(removed):
-                    rounds += 1
+                    // Taking mutants out does not count either: a build that
+                    // names one file's rejections at a time takes a round per
+                    // file, and there are only so many mutants to take.
+                    if removed.isEmpty { rounds += 1 }
                     pulled = removed
                 }
                 guard !pulled.isEmpty else { continue }
