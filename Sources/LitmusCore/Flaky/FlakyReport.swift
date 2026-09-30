@@ -92,7 +92,7 @@ public struct FlakyReport: Sendable {
 
         if !calm.isEmpty {
             lines.append("")
-            lines.append("left out \(calm.count) changed test(s) that reach nothing that can vary: \(calm.joined(separator: ", "))")
+            lines.append("left out \(calm.count) changed test(s) that reach nothing that can vary: \(Self.some(calm))")
         }
 
         if !skipped.isEmpty {
@@ -113,6 +113,11 @@ public struct FlakyReport: Sendable {
             }
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// The first few names, and a count for the rest: a project listed 53.
+    public static func some(_ names: [String], shown: Int = 5) -> String {
+        names.prefix(shown).joined(separator: ", ") + (names.count > shown ? " and \(names.count - shown) more" : "")
     }
 
     /// `launch 1m 45s, alone 30s, suite 100 × 2.7s (1.5s–7.5s), alone again 25s`:

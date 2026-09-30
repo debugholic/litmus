@@ -207,6 +207,37 @@ Litmus picks between them by looking for an `.xcodeproj` or `.xcworkspace`, and
 failing that, for an `import UIKit`: a project that reaches for UIKit cannot
 build for this machine whatever else is true of it.
 
+## Flaky tests
+
+`litmus flaky` reruns the tests and names the ones whose result changes.
+
+```
+litmus flaky          # the tests this branch changed
+litmus flaky --all    # every test
+```
+
+Before building, it follows what each changed test calls through the
+project's sources, and keeps the tests that reach something that can vary:
+a task, a timer, the clock, chance, `UserDefaults`, a shared instance. When
+none does, it stops there, without a build. The rest run on one simulator,
+in one process:
+
+1. each alone, last first, before anything else — one that needs another
+   test to run first fails here
+2. together, 100 times (10 with `--all`) — one that fails at random
+3. each alone again — one that depends on state the others left behind
+
+```
+1 test(s) not stable:
+  refreshesOnResume()  fails 3 of 100 runs together  (FeedViewModelTests.swift)
+
+took 2m 3s — build 19s, launch 1m 29s, alone 0.1s, together 100 × 0.1s (0.0s–1.9s)
+```
+
+It exits with 2 when a test is not stable. Swift Testing only: XCTest cases
+are not rerun.
+
+
 ## How it works
 
 Every mutant is compiled into the binary at once, each behind an environment

@@ -84,7 +84,7 @@ struct Flaky: AsyncParsableCommand {
             print("  \(found.count + calm.count) changed test(s), \(found.count) reaching something that can vary:")
             lines.forEach { print($0) }
             if !calm.isEmpty {
-                print("  left out, since nothing they reach can vary: \(calm.joined(separator: ", "))")
+                print("  left out, since nothing they reach can vary: \(FlakyReport.some(calm))")
             }
             guard !found.isEmpty else {
                 print("no changed test reaches anything that can vary, so none is run again.")

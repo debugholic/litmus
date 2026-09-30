@@ -265,6 +265,12 @@ struct FlakyTests {
             .contains("took 4m 0s — build 40s, launch 1m 45s, alone 30s, suite 3 × 3.0s (1.5s–5.0s), alone again 25s"))
     }
 
+    @Test("names a few of a long list, and counts the rest")
+    func some() {
+        #expect(FlakyReport.some(["a", "b"]) == "a, b")
+        #expect(FlakyReport.some((1...8).map(String.init)) == "1, 2, 3, 4, 5 and 3 more")
+    }
+
     @Test("reports the unstable tests, and what was left out")
     func report() throws {
         var lines = listing
