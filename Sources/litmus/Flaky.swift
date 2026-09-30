@@ -4,7 +4,8 @@ import LitmusCore
 
 struct Flaky: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Run the tests again and again, and report the ones whose result changes."
+        abstract: "Run the tests again and again, and report the ones whose result changes.",
+        discussion: "Exits with 2 when a test is not stable, after writing the report."
     )
 
     @Option(help: "Project to test. It is never modified.")
@@ -192,6 +193,15 @@ struct Flaky: AsyncParsableCommand {
             print("\n  report written to \(output)")
         } else {
             print("\n" + rendered)
+        }
+
+        // After the report, so a failing run still leaves it to read. A test
+        // whose result changes is what this command is for, so finding one
+        // fails the pipeline without being asked to.
+        let unstable = report.unstable.count
+        if unstable > 0 {
+            print("  \(unstable) test(s) not stable".red)
+            throw ExitCode(2)
         }
     }
 }
