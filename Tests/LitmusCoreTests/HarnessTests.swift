@@ -153,6 +153,30 @@ struct HarnessTests {
         #expect(rebuilt.artifact == nil)
     }
 
+    /// Each worker past the first runs in a clone of the built package, so
+    /// none shares another's .build.
+    @Test("gives each worker past the first a clone of the built package, and runs it there")
+    func swiftPackageWorkers() async throws {
+        let tool = try FakeTool()
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("litmus-workers-\(UUID().uuidString)")
+        let copy = root.appendingPathComponent("package")
+        try FileManager.default.createDirectory(at: copy.appendingPathComponent(".build"), withIntermediateDirectories: true)
+        try "built".write(to: copy.appendingPathComponent(".build/product"), atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let package = SwiftPackage(executable: tool.path, workingDirectory: copy, buildSystem: [], workers: 3)
+        #expect(SwiftPackage.lanes(3) == ["worker 1", "worker 2", "worker 3"])
+        _ = try await package.build(lane: "worker 1")
+
+        for worker in 2...3 {
+            let clone = root.appendingPathComponent("package-worker\(worker)")
+            #expect(try String(contentsOf: clone.appendingPathComponent(".build/product"), encoding: .utf8) == "built")
+        }
+        #expect(package.directory(for: "worker 1") == copy)
+        #expect(package.directory(for: "worker 3") == root.appendingPathComponent("package-worker3"))
+    }
+
     // MARK: - xcodebuild
 
     /// `man xcodebuild` documents `TEST_RUNNER_<VAR>` as the way to pass a
