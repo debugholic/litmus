@@ -100,19 +100,43 @@ struct SubprocessTests {
             )
         }
         // Started on another task; wait until it is actually running.
-        let mine: (Process) -> Bool = { $0.arguments?.contains(marker) == true }
-        while !Subprocess.isRunning(matching: mine), Date().timeIntervalSince(started) < 30 {
+        let mine: @Sendable (Process) -> Bool = { $0.arguments?.contains(marker) == true }
+        while await !Subprocess.isRunning(matching: mine), Date().timeIntervalSince(started) < 30 {
             try await Task.sleep(nanoseconds: 100_000_000)
         }
 
         // Only this test's process: other tests run theirs at the same time.
-        Subprocess.stopAll(grace: 2, matching: mine)
+        await Subprocess.stopAll(grace: 2, matching: mine)
         let output = try await task.value
 
         // Stopped well before its sleep of 60 seconds ran out. A loaded CI
         // runner took 21 seconds to get there, so the bound is loose.
         #expect(output.status != 0)
         #expect(Date().timeIntervalSince(started) < 50)
+    }
+
+    /// `defer` untracked a tool however the call ended; the actor's
+    /// `untrack` is awaited, so the helper does it on the way out instead.
+    @Test("forgets a tool when the work around it throws")
+    func untracksOnThrow() async throws {
+        let marker = "litmus-untrack-\(UUID().uuidString)"
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", "sleep 30; true", marker]
+        try process.run()
+        defer { process.terminate() }
+        let mine: @Sendable (Process) -> Bool = { $0.arguments?.contains(marker) == true }
+
+        struct Failed: Error {}
+        await #expect(throws: Failed.self) {
+            try await Subprocess.tracking(process) {
+                #expect(await Subprocess.isRunning(matching: mine))
+                throw Failed()
+            }
+        }
+
+        let tracked = await Subprocess.isRunning(matching: mine)
+        #expect(!tracked)
     }
 
     /// A lane whose sibling failed is cancelled. The tool it was waiting on
@@ -129,15 +153,16 @@ struct SubprocessTests {
                 timeout: 120
             )
         }
-        let mine: (Process) -> Bool = { $0.arguments?.contains(marker) == true }
-        while !Subprocess.isRunning(matching: mine), Date().timeIntervalSince(started) < 30 {
+        let mine: @Sendable (Process) -> Bool = { $0.arguments?.contains(marker) == true }
+        while await !Subprocess.isRunning(matching: mine), Date().timeIntervalSince(started) < 30 {
             try await Task.sleep(nanoseconds: 100_000_000)
         }
 
         task.cancel()
 
         await #expect(throws: CancellationError.self) { try await task.value }
-        #expect(!Subprocess.isRunning(matching: mine))
+        let stillRunning = await Subprocess.isRunning(matching: mine)
+        #expect(!stillRunning)
         #expect(Date().timeIntervalSince(started) < 50)
     }
 

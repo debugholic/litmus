@@ -84,70 +84,69 @@ extension Xcodebuild {
         process.terminationHandler = { _ in exited.open() }
 
         try process.run()
-        Subprocess.track(process)
-        defer { Subprocess.untrack(process) }
+        return try await Subprocess.tracking(process) {
+            var report = Batch.Report(url: resultsFile)
+            var run = FlakyRun(target: target)
+            run.grouped = pick != nil
+            let launched = Date()
 
-        var report = Batch.Report(url: resultsFile)
-        var run = FlakyRun(target: target)
-        run.grouped = pick != nil
-        let launched = Date()
-
-        func consume() {
-            let lines = report.lines()
-            if run.launch == nil, !lines.isEmpty { run.launch = Date().timeIntervalSince(launched) }
-            for line in lines {
-                let ended = line.hasPrefix("END")
-                run.read(line)
-                if ended { onPass(run) }
+            func consume() {
+                let lines = report.lines()
+                if run.launch == nil, !lines.isEmpty { run.launch = Date().timeIntervalSince(launched) }
+                for line in lines {
+                    let ended = line.hasPrefix("END")
+                    run.read(line)
+                    if ended { onPass(run) }
+                }
             }
-        }
 
-        while process.isRunning {
+            while process.isRunning {
+                consume()
+
+                if let pass = run.running {
+                    // A pass that takes ten times the longest one so far, and at
+                    // least a minute, is not coming back. One waiting on a server
+                    // may be: a request's own timeout is a minute, and a slow
+                    // server is what it is waiting out, not a hang.
+                    let waitsOnServer = pass.phase == .reverse && FileManager.default.fileExists(atPath: serverFile.path)
+                    let limit = max(waitsOnServer ? Self.serverPassLimit : 60, run.longestPass * 10)
+                    if Date().timeIntervalSince(pass.since) > limit {
+                        await Subprocess.stop(process)
+                        run.stop = FlakyRun.Stop(phase: pass.phase, index: pass.index, hung: true)
+                        break
+                    }
+                } else if run.tests.isEmpty, Date().timeIntervalSince(launched) > launchTimeout {
+                    await Subprocess.stop(process)
+                    throw Failure(description: """
+                    the test runner never started:
+
+                    \(Self.errorLines(in: log.text))
+                    """)
+                }
+
+                do {
+                    try await Task.sleep(nanoseconds: 500_000_000)
+                } catch {
+                    await Subprocess.stop(process, grace: 0)
+                    throw error
+                }
+            }
+
+            await exited.wait()
+            guard exited.isOpen else { throw CancellationError() }
             consume()
 
-            if let pass = run.running {
-                // A pass that takes ten times the longest one so far, and at
-                // least a minute, is not coming back. One waiting on a server
-                // may be: a request's own timeout is a minute, and a slow
-                // server is what it is waiting out, not a hang.
-                let waitsOnServer = pass.phase == .reverse && FileManager.default.fileExists(atPath: serverFile.path)
-                let limit = max(waitsOnServer ? Self.serverPassLimit : 60, run.longestPass * 10)
-                if Date().timeIntervalSince(pass.since) > limit {
-                    await Subprocess.stop(process)
-                    run.stop = FlakyRun.Stop(phase: pass.phase, index: pass.index, hung: true)
-                    break
+            if !run.finished, run.stop == nil {
+                guard let pass = run.running else {
+                    throw Failure(description: """
+                    the flaky driver did not run:
+
+                    \(Self.errorLines(in: log.text))
+                    """)
                 }
-            } else if run.tests.isEmpty, Date().timeIntervalSince(launched) > launchTimeout {
-                await Subprocess.stop(process)
-                throw Failure(description: """
-                the test runner never started:
-
-                \(Self.errorLines(in: log.text))
-                """)
+                run.stop = FlakyRun.Stop(phase: pass.phase, index: pass.index, hung: false)
             }
-
-            do {
-                try await Task.sleep(nanoseconds: 500_000_000)
-            } catch {
-                await Subprocess.stop(process, grace: 0)
-                throw error
-            }
+            return run
         }
-
-        await exited.wait()
-        guard exited.isOpen else { throw CancellationError() }
-        consume()
-
-        if !run.finished, run.stop == nil {
-            guard let pass = run.running else {
-                throw Failure(description: """
-                the flaky driver did not run:
-
-                \(Self.errorLines(in: log.text))
-                """)
-            }
-            run.stop = FlakyRun.Stop(phase: pass.phase, index: pass.index, hung: false)
-        }
-        return run
     }
 }

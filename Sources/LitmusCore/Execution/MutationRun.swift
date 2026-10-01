@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Drives one mutation testing run: build once, then flip mutants on one at a time.
 public struct MutationRun: Sendable {
@@ -254,34 +255,30 @@ public struct MutationRun: Sendable {
 
     /// Tests that failed when run again on their own, from every lane's
     /// probe.
-    private final class Apart: @unchecked Sendable {
-        private let lock = NSLock()
-        private var found: [String: TestRef] = [:]
+    private final class Apart: Sendable {
+        private let found = OSAllocatedUnfairLock(initialState: [String: TestRef]())
 
         func add(_ test: TestRef) {
-            lock.lock(); defer { lock.unlock() }
-            found[test.id] = test
+            found.withLock { $0[test.id] = test }
         }
 
         var tests: [TestRef] {
-            lock.lock(); defer { lock.unlock() }
-            return found.values.sorted { ($0.name, $0.id) < ($1.name, $1.id) }
+            found.withLock { $0.values.sorted { ($0.name, $0.id) < ($1.name, $1.id) } }
         }
     }
 
-    private final class Clock: @unchecked Sendable {
-        private let lock = NSLock()
-        private var measured = Phases()
+    private final class Clock: Sendable {
+        private let measured = OSAllocatedUnfairLock(initialState: Phases())
 
         func add(build: TimeInterval = 0, baseline: TimeInterval = 0) {
-            lock.lock(); defer { lock.unlock() }
-            measured.build += build
-            measured.baseline += baseline
+            measured.withLock {
+                $0.build += build
+                $0.baseline += baseline
+            }
         }
 
         var phases: Phases {
-            lock.lock(); defer { lock.unlock() }
-            return measured
+            measured.withLock { $0 }
         }
     }
 
@@ -821,17 +818,16 @@ public struct MutationRun: Sendable {
 }
 
 /// Counts finished mutants across lanes.
-private final class Tally: @unchecked Sendable {
+private final class Tally: Sendable {
     let total: Int
-    private var done = 0
-    private let lock = NSLock()
+    private let done = OSAllocatedUnfairLock(initialState: 0)
 
     init(total: Int) { self.total = total }
 
     func next() -> Int {
-        lock.lock()
-        defer { lock.unlock() }
-        done += 1
-        return done
+        done.withLock {
+            $0 += 1
+            return $0
+        }
     }
 }
