@@ -234,6 +234,18 @@ in one process:
 took 2m 3s — build 19s, launch 1m 29s, alone 0.1s, together 100 × 0.1s (0.0s–1.9s)
 ```
 
+A stub answers at once and in order, every run, so a test that only passes
+when the network does too never shows it. In the copy it builds, `litmus
+flaky` holds every awaited `URLSession` response back a random while, up to
+300 ms: the call still goes wherever it went — a stub, a mock, a server — and
+only its answer is late, by a different amount each time. No request is
+added. `--jitter <ms>` sets the most it waits, and `--jitter 0` turns it off.
+
+On a search that shows whichever answer comes last, typing "a" then "ab",
+the test that expects "ab" failed 5 of 30 runs with a stub that answers at
+once, and 13 of 30 held back. With the stale answer ignored, it passed all 30
+held back.
+
 It exits with 2 when a test is not stable. Swift Testing only: XCTest cases
 are not rerun.
 

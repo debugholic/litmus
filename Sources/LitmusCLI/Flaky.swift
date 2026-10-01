@@ -25,6 +25,13 @@ struct Flaky: AsyncParsableCommand {
     """)
     var runs: Int?
 
+    @Option(help: """
+    Hold back every awaited URLSession response by up to this many \
+    milliseconds, at random, so a test that passes only when the network \
+    answers fast or in order shows it. 0 turns it off.
+    """)
+    var jitter: Int = 300
+
     @Option(help: "Report format: plain or json.")
     var format: FlakyReport.Format = .plain
 
@@ -34,6 +41,7 @@ struct Flaky: AsyncParsableCommand {
     func validate() throws {
         guard (runs ?? 1) >= 1 else { throw ValidationError("--runs has to be at least 1") }
         guard since == nil || !all else { throw ValidationError("pass --since or --all, not both") }
+        guard jitter >= 0 else { throw ValidationError("--jitter cannot be negative") }
     }
 
     func run() async throws {
@@ -108,6 +116,14 @@ struct Flaky: AsyncParsableCommand {
         Interruption.install()
         try RunLock.acquire(for: working)
         try ProjectInjection.clone(project, to: working)
+
+        // In the copy, before the first build, so the tests the build lists
+        // and the ones the driver runs are the same code.
+        if jitter > 0 {
+            let held = try NetworkJitter.apply(under: working, upTo: jitter)
+            let calls = held.values.reduce(0, +)
+            print("  network responses held back up to \(jitter)ms, at \(calls) call(s) in \(held.count) file(s)")
+        }
 
         let (testHarness, lanes) = try HarnessOptions.resolve(device, workers: 1, for: working, writeScheme: true) { print("  \($0)") }
         guard let xcodebuild = testHarness as? Xcodebuild else {
