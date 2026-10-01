@@ -31,9 +31,11 @@ struct SubprocessTests {
             executable: "/bin/sh",
             arguments: ["-c", "echo started; exec sleep 60"],
             directory: directory,
-            // Five seconds, not one: on a busy machine the shell had not
-            // printed before a one-second limit stopped it.
-            timeout: 5
+            // Two seconds, not one: on a busy machine the shell had not
+            // printed before a one-second limit stopped it. Five, as it was,
+            // made this one of the two slowest tests, and every mutant of a
+            // self-run waits for the slowest.
+            timeout: 2
         )
 
         #expect(output.timedOut)
@@ -53,7 +55,7 @@ struct SubprocessTests {
             arguments: ["-c", "sh -c 'echo $$ > \(marker.path); exec sleep 60' & wait"],
             directory: directory,
             // Long enough for the child to write its pid on a busy machine.
-            timeout: 5
+            timeout: 2
         )
 
         let pid = try #require(pid_t(
@@ -141,24 +143,34 @@ struct SubprocessTests {
 
     /// Waiting on a tool holds no thread, so more of them than there are
     /// cores all run at once.
+    ///
+    /// Told by what each tool saw, not by the clock: each marks that it
+    /// started, waits, and counts the marks. Run at once, every one counts
+    /// them all; a core's worth at a time, the first ones count fewer. A
+    /// limit on the time it all took failed on a slow runner instead.
     @Test("runs more tools at once than the machine has cores")
     func holdsNoThread() async throws {
         let count = ProcessInfo.processInfo.activeProcessorCount * 2 + 2
-        let started = Date()
+        let marks = FileManager.default.temporaryDirectory
+            .appendingPathComponent("litmus-at-once-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: marks, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: marks) }
 
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            for _ in 0..<count {
+        let seen = try await withThrowingTaskGroup(of: Int.self) { group in
+            for index in 0..<count {
                 group.addTask {
-                    _ = try await Subprocess.run(
-                        executable: "/bin/sleep", arguments: ["2"], directory: directory
+                    let output = try await Subprocess.run(
+                        executable: "/bin/sh",
+                        arguments: ["-c", "touch '\(marks.path)/\(index)'; sleep 2; ls '\(marks.path)' | wc -l"],
+                        directory: directory
                     )
+                    return Int(output.log.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
                 }
             }
-            try await group.waitForAll()
+            return try await group.reduce(into: [Int]()) { $0.append($1) }
         }
 
-        // One after another, or a core's worth at a time, would take three
-        // rounds of two seconds at least.
-        #expect(Date().timeIntervalSince(started) < 5.5)
+        #expect(seen.count == count)
+        #expect(seen.min() == count)
     }
 }
