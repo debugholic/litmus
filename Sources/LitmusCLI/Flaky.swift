@@ -32,6 +32,12 @@ struct Flaky: AsyncParsableCommand {
     """)
     var jitter: Int = 300
 
+    @Flag(help: """
+    Rerun the tests that reach a server too. They run alone once and not \
+    again otherwise, since each rerun is a request to it.
+    """)
+    var allowServer = false
+
     @Option(help: "Report format: plain or json.")
     var format: FlakyReport.Format = .plain
 
@@ -118,11 +124,14 @@ struct Flaky: AsyncParsableCommand {
         try ProjectInjection.clone(project, to: working)
 
         // In the copy, before the first build, so the tests the build lists
-        // and the ones the driver runs are the same code.
-        if jitter > 0 {
-            let held = try NetworkJitter.apply(under: working, upTo: jitter)
-            let calls = held.values.reduce(0, +)
-            print("  network responses held back up to \(jitter)ms, at \(calls) call(s) in \(held.count) file(s)")
+        // and the ones the driver runs are the same code. With no jitter the
+        // calls are still wrapped, to tell a test that reaches a server.
+        let held = try NetworkJitter.apply(under: working, upTo: jitter)
+        let calls = held.values.reduce(0, +)
+        if calls > 0 {
+            print(jitter > 0
+                ? "  network responses held back up to \(jitter)ms, at \(calls) call(s) in \(held.count) file(s)"
+                : "  network calls watched, at \(calls) call(s) in \(held.count) file(s)")
         }
 
         let (testHarness, lanes) = try HarnessOptions.resolve(device, workers: 1, for: working, writeScheme: true) { print("  \($0)") }
@@ -179,12 +188,16 @@ struct Flaky: AsyncParsableCommand {
         for (target, pick) in targets {
             let together = pick == nil ? "the suite" : "the changed tests together"
             heartbeat.begin("  \(target.name): each test alone, \(together) \(runs) time(s), each alone again…")
-            let run = try await xcodebuild.runFlaky(prepared, target: target.name, lane: lane, runs: runs, pick: pick) { run in
+            let run = try await xcodebuild.runFlaky(
+                prepared, target: target.name, lane: lane, runs: runs, pick: pick, allowServer: allowServer
+            ) { run in
                 heartbeat.report(run.progress(of: runs))
             }
             heartbeat.end()
-            let unstable = run.verdicts.count { !$0.isStable }
-            print("  \(target.name): \(run.tests.count) test(s), \(unstable) not stable")
+            let unstable = run.verdicts.count(where: \.isUnstable)
+            let servers = run.verdicts.count(where: \.reachesServer)
+            print("  \(target.name): \(run.tests.count) test(s), \(unstable) not stable"
+                + (servers > 0 ? ", \(servers) reached a server and ran once" : ""))
             results.append(run)
         }
 

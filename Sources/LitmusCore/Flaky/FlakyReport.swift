@@ -41,7 +41,12 @@ public struct FlakyReport: Sendable {
 
     /// Every test that is not stable, with its target.
     public var unstable: [(target: String, verdict: FlakyRun.Verdict)] {
-        runs.flatMap { run in run.verdicts.filter { !$0.isStable }.map { (run.target, $0) } }
+        runs.flatMap { run in run.verdicts.filter(\.isUnstable).map { (run.target, $0) } }
+    }
+
+    /// Tests that reached a server, run alone once and not again.
+    public var servers: [(target: String, verdict: FlakyRun.Verdict)] {
+        runs.flatMap { run in run.verdicts.filter { $0.reachesServer && !$0.isUnstable }.map { (run.target, $0) } }
     }
 
     public var testCount: Int { runs.map(\.tests.count).reduce(0, +) }
@@ -62,9 +67,13 @@ public struct FlakyReport: Sendable {
             + "each alone before, \(together) \(asked) time(s), each alone again after"]
 
         let unstable = self.unstable
-        if unstable.isEmpty {
+        let servers = self.servers
+        if unstable.isEmpty, servers.isEmpty {
             lines.append("")
             lines.append("every test passed every time")
+        } else if unstable.isEmpty {
+            lines.append("")
+            lines.append("\(testCount - servers.count) test(s) passed every time")
         } else {
             lines.append("")
             lines.append("\(unstable.count) test(s) not stable:")
@@ -76,7 +85,14 @@ public struct FlakyReport: Sendable {
                     + (place.isEmpty ? "" : "  (\(place))"))
             }
             lines.append("")
-            lines.append("\(testCount - unstable.count) test(s) passed every time")
+            lines.append("\(testCount - unstable.count - servers.count) test(s) passed every time")
+        }
+
+        if !servers.isEmpty {
+            lines.append("")
+            lines.append("\(servers.count) test(s) reached a server, so ran alone once and not again: "
+                + Self.some(servers.map(\.verdict.name)))
+            lines.append("  each rerun would be a request to it; --allow-server reruns them anyway")
         }
 
         for run in runs {
@@ -147,6 +163,7 @@ public struct FlakyReport: Sendable {
             "calm": calm,
             "tests": testCount,
             "unstable": unstable.count,
+            "servers": servers.count,
             "duration": duration,
             "targets": runs.map { run in
                 [
@@ -177,6 +194,7 @@ public struct FlakyReport: Sendable {
                             "failed": verdict.failed,
                             "ran": verdict.ran,
                             "stable": verdict.isStable,
+                            "reachesServer": verdict.reachesServer,
                             "reasons": verdict.reasons,
                         ] as [String: Any]
                     },

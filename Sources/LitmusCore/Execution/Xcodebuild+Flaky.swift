@@ -9,6 +9,10 @@ extension Xcodebuild {
         return try await build(lane: lane)
     }
 
+    /// How long a lone pass that reached a server may take before it is
+    /// called hung: three of a request's own one-minute timeouts.
+    static let serverPassLimit: TimeInterval = 180
+
     /// Runs the flaky driver in one test target to the end, or until the
     /// process stops, and returns what it wrote.
     ///
@@ -21,6 +25,7 @@ extension Xcodebuild {
         lane: String,
         runs: Int,
         pick: [ChangedTests.Span]? = nil,
+        allowServer: Bool = false,
         launchTimeout: TimeInterval = 20 * 60,
         onPass: (FlakyRun) -> Void = { _ in }
     ) async throws -> FlakyRun {
@@ -37,10 +42,15 @@ extension Xcodebuild {
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: scratch) }
         let resultsFile = scratch.appendingPathComponent("results.txt")
+        let serverFile = scratch.appendingPathComponent("server")
         var environment = [
             "TEST_RUNNER_\(FlakyDriver.resultsVariable)": resultsFile.path,
             "TEST_RUNNER_\(FlakyDriver.runsVariable)": String(runs),
+            "TEST_RUNNER_\(NetworkJitter.serverVariable)": serverFile.path,
         ]
+        if allowServer {
+            environment["TEST_RUNNER_\(FlakyDriver.allowServerVariable)"] = "1"
+        }
         if let pick {
             let pickFile = scratch.appendingPathComponent("pick.txt")
             try pick.map(\.line).joined(separator: "\n").write(to: pickFile, atomically: true, encoding: .utf8)
@@ -97,8 +107,11 @@ extension Xcodebuild {
 
             if let pass = run.running {
                 // A pass that takes ten times the longest one so far, and at
-                // least a minute, is not coming back.
-                let limit = max(60, run.longestPass * 10)
+                // least a minute, is not coming back. One waiting on a server
+                // may be: a request's own timeout is a minute, and a slow
+                // server is what it is waiting out, not a hang.
+                let waitsOnServer = pass.phase == .reverse && FileManager.default.fileExists(atPath: serverFile.path)
+                let limit = max(waitsOnServer ? Self.serverPassLimit : 60, run.longestPass * 10)
                 if Date().timeIntervalSince(pass.since) > limit {
                     await Subprocess.stop(process)
                     run.stop = FlakyRun.Stop(phase: pass.phase, index: pass.index, hung: true)

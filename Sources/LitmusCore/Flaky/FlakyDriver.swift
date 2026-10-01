@@ -23,6 +23,9 @@ public enum FlakyDriver {
     /// A file of spans, `File.swift`, first line, last line: only the tests
     /// declared in one run. Without it, every test does.
     static let pickVariable = "LITMUS_FLAKY_PICK"
+    /// Set to rerun a test that reached a server, which is left out otherwise.
+    static let allowServerVariable = "LITMUS_FLAKY_ALLOW_SERVER"
+    static let sentinelClass = "__LitmusServerSentinel"
 
     /// Whether the driver can run a target's tests, and what it leaves out
     /// when it can: nil to run it, else why not. `note` names XCTest cases
@@ -51,6 +54,19 @@ public enum FlakyDriver {
     import Testing
     import XCTest
 
+    /// Asked about every request the shared session makes that no stub
+    /// registered after it takes: one going to a server. Notes it, and lets
+    /// it go on its way.
+    final class \#(sentinelClass): URLProtocol {
+        override class func canInit(with request: URLRequest) -> Bool {
+            if ["http", "https"].contains(request.url?.scheme ?? ""),
+               let path = ProcessInfo.processInfo.environment["\#(NetworkJitter.serverVariable)"] {
+                FileManager.default.createFile(atPath: path, contents: Data())
+            }
+            return false
+        }
+    }
+
     final class \#(driverClass): XCTestCase {
         func \#(driverTest)() async throws {
             let environment = ProcessInfo.processInfo.environment
@@ -58,6 +74,11 @@ public enum FlakyDriver {
                 let resultsPath = environment["\#(resultsVariable)"],
                 let runs = environment["\#(runsVariable)"].flatMap({ Int($0) })
             else { return }
+
+            // Before any test, so a stub a test registers is asked first.
+            URLProtocol.registerClass(\#(sentinelClass).self)
+            let serverPath = environment["\#(NetworkJitter.serverVariable)"]
+            let allowServer = environment["\#(allowServerVariable)"] != nil
 
             FileManager.default.createFile(atPath: resultsPath, contents: nil)
             guard let results = FileHandle(forWritingAtPath: resultsPath) else { return }
@@ -164,13 +185,25 @@ public enum FlakyDriver {
 
             func alone(_ test: String) -> [String] { [NSRegularExpression.escapedPattern(for: test)] }
 
+            // A test that reached a server runs alone, once, and not again:
+            // each rerun would be another request to it.
+            var servers: Set<String> = []
             for (index, test) in tests.reversed().enumerated() {
+                if let serverPath { try? FileManager.default.removeItem(atPath: serverPath) }
                 await pass("reverse", index, alone(test))
+                if let serverPath, FileManager.default.fileExists(atPath: serverPath) {
+                    servers.insert(test)
+                    record(["SERVER", test])
+                }
             }
-            for index in 0..<runs {
-                await pass("suite", index, group)
+            let rerun = allowServer ? tests : tests.filter { !servers.contains($0) }
+            if !rerun.isEmpty {
+                let filter = rerun.count == tests.count ? group : rerun.map { NSRegularExpression.escapedPattern(for: $0) }
+                for index in 0..<runs {
+                    await pass("suite", index, filter)
+                }
             }
-            for (index, test) in tests.enumerated() {
+            for (index, test) in tests.enumerated() where rerun.contains(test) {
                 await pass("again", index, alone(test))
             }
             record(["DONE"])

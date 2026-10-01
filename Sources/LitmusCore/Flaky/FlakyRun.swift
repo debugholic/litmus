@@ -35,6 +35,8 @@ public struct FlakyRun: Sendable {
     public private(set) var tests: [String] = []
     public private(set) var names: [String: String] = [:]
     public private(set) var outcomes: [Outcome] = []
+    /// Tests that reached a server when run alone, and so were not run again.
+    public private(set) var servers: Set<String> = []
     /// How long each pass took, by phase and index.
     public private(set) var durations: [String: TimeInterval] = [:]
     public private(set) var finished = false
@@ -68,6 +70,8 @@ public struct FlakyRun: Sendable {
         case "END" where fields.count == 4:
             durations["\(fields[1]) \(fields[2])"] = TimeInterval(fields[3])
             running = nil
+        case "SERVER" where fields.count == 2:
+            servers.insert(fields[1])
         case "DONE":
             finished = true
             running = nil
@@ -141,8 +145,12 @@ public struct FlakyRun: Sendable {
         public let failed: Int
         public let ran: Int
         public let reasons: [String]
+        /// It reached a server when run alone, and was not run again: it is
+        /// neither stable nor not.
+        public var reachesServer = false
 
-        public var isStable: Bool { reasons.isEmpty }
+        public var isStable: Bool { reasons.isEmpty && !reachesServer }
+        public var isUnstable: Bool { !reasons.isEmpty }
 
         /// `Module.Suite/function()/File.swift:12:5` gives `File.swift`.
         public var file: String? { TestRef(id: test, name: name).file }
@@ -183,7 +191,9 @@ public struct FlakyRun: Sendable {
                 reasons.append(stop.hung ? "hung when run on its own" : "took the process down when run on its own")
             }
 
-            return Verdict(test: test, name: names[test] ?? test, failed: failed, ran: suite.count, reasons: reasons)
+            var verdict = Verdict(test: test, name: names[test] ?? test, failed: failed, ran: suite.count, reasons: reasons)
+            verdict.reachesServer = servers.contains(test) && suite.isEmpty
+            return verdict
         }
     }
 }
