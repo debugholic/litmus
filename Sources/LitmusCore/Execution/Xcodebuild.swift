@@ -391,7 +391,7 @@ public struct Xcodebuild: Sendable, TestHarness {
             directory: workingDirectory,
             environment: environment,
             onLine: report.map { report in
-                { line in if let summary = activity.read(line) { report(summary) } }
+                { @Sendable line in if let summary = activity.read(line) { report(summary) } }
             }
         )
         return (output.log, output.status)
