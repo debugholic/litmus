@@ -9,6 +9,11 @@ on:
   schedule:
     - cron: "0 18 * * 6"
   workflow_dispatch:
+    inputs:
+      only:
+        description: "Only mutate files whose path contains this, to try a change quickly. Empty scores the whole tree."
+        required: false
+        default: ""
 
 # One at a time per ref. A run started by hand waits for the one going
 # rather than throwing away its hours.
@@ -36,13 +41,15 @@ jobs:
         run: |
           set -o pipefail
           BIN=$(swift build -c release --show-bin-path)/litmus
-          "$BIN" --all --format json --output litmus.json 2>&1 | tee litmus.log
+          ONLY=()
+          if [ -n "${{ inputs.only }}" ]; then ONLY=(--only "${{ inputs.only }}"); fi
+          "$BIN" --all "${ONLY[@]}" --format json --output litmus.json 2>&1 | tee litmus.log
 
       # Litmus says the suite could not run, not why. The baseline is one
       # `swift test --skip-build` in its working copy, so run that again where
       # it ran and keep what it printed.
       - name: Run the baseline again, for its log
-        if: failure()
+        if: failure() || cancelled()
         run: |
           mkdir -p diagnostics
           cp litmus.log diagnostics/ || true
@@ -54,7 +61,7 @@ jobs:
           tail -60 diagnostics/baseline.log
 
       - name: Keep the logs
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v4
         with:
           name: litmus-diagnostics
@@ -83,7 +90,7 @@ jobs:
       # Only main's score is the badge; a run started by hand on a branch is
       # for its logs.
       - name: Publish to the badges branch
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && inputs.only == ''
         run: |
           cd badge
           git init -q -b badges
