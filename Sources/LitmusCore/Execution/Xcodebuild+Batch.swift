@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 extension Xcodebuild: BatchingHarness {
     public func prepareBatch(
@@ -62,24 +63,20 @@ extension Xcodebuild: BatchingHarness {
 }
 
 /// The last part of a log, kept while it is being written.
-final class LogTail: @unchecked Sendable {
-    private let lock = NSLock()
-    private var data = Data()
+final class LogTail: Sendable {
+    private let data = OSAllocatedUnfairLock(initialState: Data())
     private let limit = 256 * 1024
 
     func append(_ chunk: Data) {
-        lock.lock()
-        defer { lock.unlock() }
-
-        data.append(chunk)
-        if data.count > limit {
-            data = data.suffix(limit)
+        data.withLock { data in
+            data.append(chunk)
+            if data.count > limit {
+                data = data.suffix(limit)
+            }
         }
     }
 
     var text: String {
-        lock.lock()
-        defer { lock.unlock() }
-        return String(decoding: data, as: UTF8.self)
+        data.withLock { String(decoding: $0, as: UTF8.self) }
     }
 }

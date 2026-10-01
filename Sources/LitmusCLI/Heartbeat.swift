@@ -1,4 +1,5 @@
 import Foundation
+import os
 import LitmusCore
 
 /// Says what a step is doing and how long it has been at it, while it runs.
@@ -23,11 +24,15 @@ final class Heartbeat: @unchecked Sendable {
 
     private let live: Bool
     private let interval: TimeInterval
-    private let lock = NSLock()
-    private var timer: DispatchSourceTimer?
-    private var started = Date()
-    private var label: String?
-    private var detail: String?
+    private struct State {
+        var timer: DispatchSourceTimer?
+        var started = Date()
+        var label: String?
+        var detail: String?
+    }
+    /// Unchecked: the timer is not Sendable, and the line is drawn while
+    /// the lock is held so two redraws never interleave.
+    private let state = OSAllocatedUnfairLock(uncheckedState: State())
 
     init(live: Bool = Heartbeat.live) {
         self.live = live
@@ -36,28 +41,27 @@ final class Heartbeat: @unchecked Sendable {
 
     /// Shows `label` and starts counting.
     func begin(_ label: String) {
-        lock.lock()
-        defer { lock.unlock() }
+        state.withLockUnchecked { state in
+            state.timer?.cancel()
+            state.started = Date()
+            state.label = label
+            state.detail = nil
 
-        timer?.cancel()
-        started = Date()
-        self.label = label
-        detail = nil
+            if live {
+                draw("\(label)  0s")
+            } else {
+                print(label)
+            }
 
-        if live {
-            draw("\(label)  0s")
-        } else {
-            print(label)
+            let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+            timer.schedule(deadline: .now() + interval, repeating: interval)
+            timer.setEventHandler { [weak self] in
+                self?.tick()
+            }
+            timer.resume()
+
+            state.timer = timer
         }
-
-        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
-        timer.schedule(deadline: .now() + interval, repeating: interval)
-        timer.setEventHandler { [weak self] in
-            self?.tick()
-        }
-        timer.resume()
-
-        self.timer = timer
     }
 
     /// Stops counting and returns how long the step took, or nil if it was
@@ -67,54 +71,51 @@ final class Heartbeat: @unchecked Sendable {
     /// `keep` is false — for a line that the result is about to replace.
     @discardableResult
     func end(keep: Bool = true) -> TimeInterval? {
-        lock.lock()
-        defer { lock.unlock() }
+        state.withLockUnchecked { state in
+            guard let timer = state.timer else { return nil }
+            timer.cancel()
+            state.timer = nil
 
-        guard let timer else { return nil }
-        timer.cancel()
-        self.timer = nil
-
-        let took = Date().timeIntervalSince(started)
-        if live, let label {
-            if keep {
-                draw("\(label)  \(Self.format(took))\n")
-            } else {
-                draw("")
+            let took = Date().timeIntervalSince(state.started)
+            if live, let label = state.label {
+                if keep {
+                    draw("\(label)  \(Self.format(took))\n")
+                } else {
+                    draw("")
+                }
             }
-        }
-        label = nil
+            state.label = nil
 
-        return took
+            return took
+        }
     }
 
     /// What the step is doing right now, shown beside its name until the
     /// next change or the next step.
     func report(_ detail: String) {
-        lock.lock()
-        defer { lock.unlock() }
-
-        guard timer != nil, let label else { return }
-        self.detail = detail
-        if live { draw(line(label)) }
-    }
-
-    private func tick() {
-        lock.lock()
-        defer { lock.unlock() }
-
-        guard timer != nil, let label else { return }
-
-        if live {
-            draw(line(label))
-        } else {
-            let doing = detail.map { " — \($0)" } ?? ""
-            print("    … \(Self.elapsed(since: started))\(doing)")
+        state.withLockUnchecked { state in
+            guard state.timer != nil, let label = state.label else { return }
+            state.detail = detail
+            if live { draw(line(label, state)) }
         }
     }
 
-    private func line(_ label: String) -> String {
-        let doing = detail.map { " \($0)" } ?? ""
-        return "\(label)\(doing)  \(Self.elapsed(since: started))"
+    private func tick() {
+        state.withLockUnchecked { state in
+            guard state.timer != nil, let label = state.label else { return }
+
+            if live {
+                draw(line(label, state))
+            } else {
+                let doing = state.detail.map { " — \($0)" } ?? ""
+                print("    … \(Self.elapsed(since: state.started))\(doing)")
+            }
+        }
+    }
+
+    private func line(_ label: String, _ state: State) -> String {
+        let doing = state.detail.map { " \($0)" } ?? ""
+        return "\(label)\(doing)  \(Self.elapsed(since: state.started))"
     }
 
     /// Replaces the current line: back to its start, clear it, write.

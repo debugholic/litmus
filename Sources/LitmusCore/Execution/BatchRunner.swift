@@ -138,83 +138,82 @@ struct BatchRunner {
         process.terminationHandler = { _ in exited.open() }
 
         try process.run()
-        Subprocess.track(process)
-        defer { Subprocess.untrack(process) }
+        return try await Subprocess.tracking(process) {
+            var report = Batch.Report(url: resultsFile)
+            var verdicts: [String: Verdict] = [:]
+            var current: (id: String, started: Date)?
+            var limits: [String: TimeInterval] = [:]
+            var reported = false
+            var stopped = false
+            let launched = Date()
 
-        var report = Batch.Report(url: resultsFile)
-        var verdicts: [String: Verdict] = [:]
-        var current: (id: String, started: Date)?
-        var limits: [String: TimeInterval] = [:]
-        var reported = false
-        var stopped = false
-        let launched = Date()
+            func consume() {
+                for event in report.read() {
+                    onEvent(event)
+                    reported = true
 
-        func consume() {
-            for event in report.read() {
-                onEvent(event)
-                reported = true
-
-                switch event {
-                case let .started(id):
-                    current = (id, Date())
-                case let .finished(id, verdict, duration):
-                    verdicts[id] = verdict
-                    current = nil
-                    if id == Batch.baseline, verdict == .survived {
-                        timeouts.learn(baseline: duration)
+                    switch event {
+                    case let .started(id):
+                        current = (id, Date())
+                    case let .finished(id, verdict, duration):
+                        verdicts[id] = verdict
+                        current = nil
+                        if id == Batch.baseline, verdict == .survived {
+                            timeouts.learn(baseline: duration)
+                        }
+                    case let .timed(test, seconds):
+                        timeouts.tests[test] = seconds
+                    case let .covered(id, tests):
+                        limits[id] = timeouts.mutant(running: tests)
+                    case .reached, .test, .killedBy, .failedAlone:
+                        break
                     }
-                case let .timed(test, seconds):
-                    timeouts.tests[test] = seconds
-                case let .covered(id, tests):
-                    limits[id] = timeouts.mutant(running: tests)
-                case .reached, .test, .killedBy, .failedAlone:
-                    break
                 }
             }
-        }
 
-        while process.isRunning {
+            while process.isRunning {
+                consume()
+
+                if let running = current {
+                    // The probe runs every test once more, one at a time: about a
+                    // baseline's worth, so it gets the baseline's allowance.
+                    let limit = running.id == Batch.baseline || running.id == Batch.probe
+                        ? timeouts.baseline
+                        : limits[running.id] ?? timeouts.mutant
+                    if Date().timeIntervalSince(running.started) > limit {
+                        await Subprocess.stop(process)
+                        stopped = true
+                        break
+                    }
+                } else if !reported, Date().timeIntervalSince(launched) > timeouts.launch {
+                    await Subprocess.stop(process)
+                    throw fail("""
+                    the test runner never started:
+
+                    \(Xcodebuild.errorLines(in: log.text))
+                    """)
+                }
+
+                // Slept as a task, so the lane holds no thread between reads.
+                // Cancelled, the runner goes with the lane.
+                do {
+                    try await Task.sleep(nanoseconds: 500_000_000)
+                } catch {
+                    await Subprocess.stop(process, grace: 0)
+                    throw error
+                }
+            }
+
+            await exited.wait()
+            guard exited.isOpen else { throw CancellationError() }
             consume()
 
-            if let running = current {
-                // The probe runs every test once more, one at a time: about a
-                // baseline's worth, so it gets the baseline's allowance.
-                let limit = running.id == Batch.baseline || running.id == Batch.probe
-                    ? timeouts.baseline
-                    : limits[running.id] ?? timeouts.mutant
-                if Date().timeIntervalSince(running.started) > limit {
-                    await Subprocess.stop(process)
-                    stopped = true
-                    break
-                }
-            } else if !reported, Date().timeIntervalSince(launched) > timeouts.launch {
-                await Subprocess.stop(process)
-                throw fail("""
-                the test runner never started:
-
-                \(Xcodebuild.errorLines(in: log.text))
-                """)
-            }
-
-            // Slept as a task, so the lane holds no thread between reads.
-            // Cancelled, the runner goes with the lane.
-            do {
-                try await Task.sleep(nanoseconds: 500_000_000)
-            } catch {
-                await Subprocess.stop(process, grace: 0)
-                throw error
-            }
+            return Launch(
+                verdicts: verdicts,
+                unfinished: current.map { ($0.id, Date().timeIntervalSince($0.started)) },
+                stopped: stopped,
+                log: log.text
+            )
         }
-
-        await exited.wait()
-        guard exited.isOpen else { throw CancellationError() }
-        consume()
-
-        return Launch(
-            verdicts: verdicts,
-            unfinished: current.map { ($0.id, Date().timeIntervalSince($0.started)) },
-            stopped: stopped,
-            log: log.text
-        )
     }
 }

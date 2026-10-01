@@ -1,4 +1,5 @@
 import Foundation
+import os
 import SwiftParser
 import SwiftSyntax
 
@@ -222,13 +223,12 @@ public struct BuildRepair: Sendable {
 }
 
 /// Sites moved back to a copy, by file, shared by every copy of a repair.
-private final class Copies: @unchecked Sendable {
-    private let lock = NSLock()
-    private var byPath: [String: Set<String>] = [:]
+private final class Copies: Sendable {
+    private let byPath = OSAllocatedUnfairLock(initialState: [String: Set<String>]())
 
     subscript(path: String) -> Set<String> {
-        get { lock.lock(); defer { lock.unlock() }; return byPath[path] ?? [] }
-        set { lock.lock(); defer { lock.unlock() }; byPath[path] = newValue }
+        get { byPath.withLock { $0[path] ?? [] } }
+        set { byPath.withLock { $0[path] = newValue } }
     }
 }
 

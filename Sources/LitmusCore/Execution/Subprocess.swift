@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Runs a tool to the end, or until it has run too long.
 public enum Subprocess {
@@ -49,9 +50,27 @@ public enum Subprocess {
         process.terminationHandler = { _ in exited.open() }
 
         try process.run()
-        track(process)
-        defer { untrack(process) }
+        await track(process)
+        do {
+            let output = try await finish(process, exited: exited, drained: drained, pipe: pipe, log: log, timeout: timeout)
+            await untrack(process)
+            return output
+        } catch {
+            await untrack(process)
+            throw error
+        }
+    }
 
+    /// Waits for the tool, stops it if it runs too long, and collects what
+    /// it wrote.
+    private static func finish(
+        _ process: Process,
+        exited: Latch,
+        drained: Latch,
+        pipe: Pipe,
+        log: Collected,
+        timeout: TimeInterval?
+    ) async throws -> Output {
         var timedOut = false
         if await !exited.wait(timeout: timeout) {
             // A lane given up on: what it started goes with it.
@@ -77,27 +96,48 @@ public enum Subprocess {
 
     // MARK: - what is running
 
-    private static let lock = NSLock()
-    nonisolated(unsafe) private static var running: [ObjectIdentifier: Process] = [:]
+    /// The tools Litmus started and has not seen end.
+    ///
+    /// An actor, not a lock: lanes add and remove from many tasks, and a
+    /// lock taken and released by hand could be left taken.
+    private actor Registry {
+        private var running: [ObjectIdentifier: Process] = [:]
 
-    /// Remembers a tool Litmus started, so an interrupted run can stop it.
-    static func track(_ process: Process) {
-        lock.lock()
-        defer { lock.unlock() }
-        running[ObjectIdentifier(process)] = process
+        func add(_ process: Process) { running[ObjectIdentifier(process)] = process }
+        func remove(_ process: Process) { running[ObjectIdentifier(process)] = nil }
+        func processes(matching: @Sendable (Process) -> Bool) -> [Process] {
+            running.values.filter(matching)
+        }
     }
 
-    static func untrack(_ process: Process) {
-        lock.lock()
-        defer { lock.unlock() }
-        running[ObjectIdentifier(process)] = nil
+    private static let registry = Registry()
+
+    /// Remembers a tool Litmus started, so an interrupted run can stop it.
+    static func track(_ process: Process) async {
+        await registry.add(process)
+    }
+
+    static func untrack(_ process: Process) async {
+        await registry.remove(process)
+    }
+
+    /// Runs `body` with the process tracked, and untracks it however the
+    /// body ends: what `defer` did, for a call that has to be awaited.
+    static func tracking<T>(_ process: Process, _ body: () async throws -> T) async rethrows -> T {
+        await track(process)
+        do {
+            let value = try await body()
+            await untrack(process)
+            return value
+        } catch {
+            await untrack(process)
+            throw error
+        }
     }
 
     /// Whether a tool Litmus started is still running.
-    static func isRunning(matching: (Process) -> Bool) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return running.values.contains { $0.isRunning && matching($0) }
+    static func isRunning(matching: @escaping @Sendable (Process) -> Bool) async -> Bool {
+        await registry.processes(matching: matching).contains { $0.isRunning }
     }
 
     /// Stops every tool Litmus started and everything they started.
@@ -108,13 +148,9 @@ public enum Subprocess {
     ///
     /// `matching` narrows it, so a test can stop what it started without
     /// stopping what other tests are running at the same time.
-    public static func stopAll(grace: TimeInterval = 5, matching: (Process) -> Bool = { _ in true }) {
-        lock.lock()
-        let processes = running.values.filter(matching)
-        lock.unlock()
-
-        for process in processes where process.isRunning {
-            stopNow(process, grace: grace)
+    public static func stopAll(grace: TimeInterval = 5, matching: @escaping @Sendable (Process) -> Bool = { _ in true }) async {
+        for process in await registry.processes(matching: matching) where process.isRunning {
+            await stop(process, grace: grace)
         }
     }
 
@@ -158,18 +194,6 @@ public enum Subprocess {
         while alive(process, tree), Date() < deadline {
             // Cancelled, it insists at once.
             do { try await Task.sleep(nanoseconds: 500_000_000) } catch { break }
-        }
-
-        insist(process, tree)
-    }
-
-    /// The same, for an interrupted run, which has no task to wait in.
-    private static func stopNow(_ process: Process, grace: TimeInterval) {
-        let tree = ask(process)
-
-        let deadline = Date().addingTimeInterval(grace)
-        while alive(process, tree), Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.5)
         }
 
         insist(process, tree)
@@ -219,10 +243,12 @@ public enum Subprocess {
         kill(pid, 0) == 0
     }
 
-    private final class Collected: @unchecked Sendable {
-        private let lock = NSLock()
-        private var data = Data()
-        private var partial = Data()
+    private final class Collected: Sendable {
+        private struct State {
+            var data = Data()
+            var partial = Data()
+        }
+        private let state = OSAllocatedUnfairLock(initialState: State())
         private let onLine: (@Sendable (String) -> Void)?
 
         init(onLine: (@Sendable (String) -> Void)?) {
@@ -230,49 +256,48 @@ public enum Subprocess {
         }
 
         func append(_ chunk: Data) {
-            lock.lock()
-            data.append(chunk)
+            let wantsLines = onLine != nil
+            let lines: [String] = state.withLock { state in
+                state.data.append(chunk)
 
-            // Whole lines only; the rest waits for the next chunk.
-            var lines: [String] = []
-            if onLine != nil {
-                partial.append(chunk)
-                while let newline = partial.firstIndex(of: UInt8(ascii: "\n")) {
-                    lines.append(String(decoding: partial[partial.startIndex..<newline], as: UTF8.self))
-                    partial = Data(partial[partial.index(after: newline)...])
+                // Whole lines only; the rest waits for the next chunk.
+                var lines: [String] = []
+                if wantsLines {
+                    state.partial.append(chunk)
+                    while let newline = state.partial.firstIndex(of: UInt8(ascii: "\n")) {
+                        lines.append(String(decoding: state.partial[state.partial.startIndex..<newline], as: UTF8.self))
+                        state.partial = Data(state.partial[state.partial.index(after: newline)...])
+                    }
                 }
+                return lines
             }
-            lock.unlock()
 
             lines.forEach { onLine?($0) }
         }
 
         var text: String {
-            lock.lock()
-            defer { lock.unlock() }
-            return String(decoding: data, as: UTF8.self)
+            state.withLock { String(decoding: $0.data, as: UTF8.self) }
         }
     }
 
     /// Opens once, and is awaited without holding a thread.
-    final class Latch: @unchecked Sendable {
-        private let lock = NSLock()
-        private var opened = false
-        private var waiting: [UUID: CheckedContinuation<Void, Never>] = [:]
+    final class Latch: Sendable {
+        private struct State {
+            var opened = false
+            var waiting: [UUID: CheckedContinuation<Void, Never>] = [:]
+        }
+        private let state = OSAllocatedUnfairLock(initialState: State())
 
         var isOpen: Bool {
-            lock.lock()
-            defer { lock.unlock() }
-            return opened
+            state.withLock { $0.opened }
         }
 
         func open() {
-            lock.lock()
-            opened = true
-            let resumed = waiting.values
-            waiting = [:]
-            lock.unlock()
-
+            let resumed = state.withLock { state in
+                state.opened = true
+                defer { state.waiting = [:] }
+                return Array(state.waiting.values)
+            }
             resumed.forEach { $0.resume() }
         }
 
@@ -281,20 +306,15 @@ public enum Subprocess {
             let id = UUID()
             await withTaskCancellationHandler {
                 await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                    lock.lock()
-                    if opened || Task.isCancelled {
-                        lock.unlock()
-                        continuation.resume()
-                    } else {
-                        waiting[id] = continuation
-                        lock.unlock()
+                    let now = state.withLock { state in
+                        if state.opened || Task.isCancelled { return true }
+                        state.waiting[id] = continuation
+                        return false
                     }
+                    if now { continuation.resume() }
                 }
             } onCancel: {
-                lock.lock()
-                let continuation = waiting.removeValue(forKey: id)
-                lock.unlock()
-                continuation?.resume()
+                state.withLock { $0.waiting.removeValue(forKey: id) }?.resume()
             }
         }
 

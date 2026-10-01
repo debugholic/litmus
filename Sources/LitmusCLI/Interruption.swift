@@ -20,7 +20,14 @@ enum Interruption {
             let source = DispatchSource.makeSignalSource(signal: number, queue: .global())
             source.setEventHandler {
                 print("\n  stopping — ending xcodebuild and the tests it started…")
-                Subprocess.stopAll(grace: 5)
+                // Waited for here, on the signal's own queue, so nothing is
+                // left running when the process exits.
+                let stopped = DispatchSemaphore(value: 0)
+                Task.detached {
+                    await Subprocess.stopAll(grace: 5)
+                    stopped.signal()
+                }
+                stopped.wait()
                 RunLock.release()
                 exit(128 + number)
             }
