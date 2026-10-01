@@ -17,7 +17,7 @@ struct NetworkJitterTests {
         let (rewritten, calls) = NetworkJitter.apply(to: source, upTo: 300)
 
         #expect(calls == 1)
-        #expect(rewritten.contains("try await __litmus_jitter(300, { try await session.data(for: request) })"))
+        #expect(rewritten.contains("try await __litmus_jitter(300, session, { try await session.data(for: request) })"))
         #expect(rewritten.components(separatedBy: "private func __litmus_jitter").count == 2)
     }
 
@@ -36,6 +36,43 @@ struct NetworkJitterTests {
 
         #expect(calls == 4)
         #expect(rewritten.components(separatedBy: "private func __litmus_jitter").count == 2)
+    }
+
+    /// The session is named again for the helper to look at, so only when
+    /// naming it again cannot make another one.
+    @Test("passes the session when naming it again is free, and nil when it is a call")
+    func passesSession() {
+        let source = """
+        func f(_ r: URLRequest) async throws {
+            _ = try await URLSession.shared.data(for: r)
+            _ = try await self.client.session.data(for: r)
+            _ = try await makeSession().data(for: r)
+        }
+        """
+
+        let (rewritten, calls) = NetworkJitter.apply(to: source, upTo: 0)
+
+        #expect(calls == 3)
+        #expect(rewritten.contains("__litmus_jitter(0, URLSession.shared, {"))
+        #expect(rewritten.contains("__litmus_jitter(0, self.client.session, {"))
+        #expect(rewritten.contains("__litmus_jitter(0, nil, { try await makeSession().data(for: r) })"))
+    }
+
+    /// What follows the call goes in the closure with it, so it still applies.
+    @Test("holds back a call followed by a tuple element, an unwrap or a member")
+    func wrapsWhatFollows() {
+        let source = """
+        func f(_ s: URLSession, _ u: URL) async {
+            let data = try? await s.data(from: u).0
+            let size = try! await s.data(from: u).0.count
+        }
+        """
+
+        let (rewritten, calls) = NetworkJitter.apply(to: source, upTo: 0)
+
+        #expect(calls == 2)
+        #expect(rewritten.contains("try? await __litmus_jitter(0, s, { try await s.data(from: u).0 })"))
+        #expect(rewritten.contains("try! await __litmus_jitter(0, s, { try await s.data(from: u).0.count })"))
     }
 
     @Test("leaves a completion handler, an unawaited call and another label alone")

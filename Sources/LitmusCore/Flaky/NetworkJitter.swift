@@ -27,17 +27,37 @@ public enum NetworkJitter {
 
     static let helperName = "__litmus_jitter"
 
+    /// Where the helper notes that a call went to a server, for the flaky
+    /// driver to leave its test out of the reruns.
+    static let serverVariable = "LITMUS_FLAKY_SERVER"
+
     /// After the answer, not before the request: a late answer is what the
     /// code has to cope with. In the caller's isolation, so a call on the
     /// main actor stays there.
+    ///
+    /// A session of the project's own making goes to a server unless a
+    /// `URLProtocol` of the project's stands in front of it. The shared one
+    /// is the driver's to judge: a stub registered with `registerClass` is
+    /// not in its configuration.
     static let helper = """
     private func \(helperName)<T>(
         _ upTo: UInt64,
+        _ via: Any?,
         isolation: isolated (any Actor)? = #isolation,
         _ body: () async throws -> sending T
     ) async rethrows -> sending T {
+        if let session = via as? URLSession, session !== URLSession.shared,
+           let path = ProcessInfo.processInfo.environment["\(serverVariable)"],
+           !(session.configuration.protocolClasses ?? []).contains(where: {
+               let name = NSStringFromClass($0)
+               return !name.hasPrefix("_NS") && !name.hasPrefix("NS")
+           }) {
+            FileManager.default.createFile(atPath: path, contents: Data())
+        }
         let value = try await body()
-        try? await Task.sleep(nanoseconds: UInt64.random(in: 0...upTo) * 1_000_000)
+        if upTo > 0 {
+            try? await Task.sleep(nanoseconds: UInt64.random(in: 0...upTo) * 1_000_000)
+        }
         return value
     }
     """
@@ -54,7 +74,7 @@ public enum NetworkJitter {
         guard !finder.found.isEmpty else { return (source, 0) }
 
         var bytes = Array(source.utf8)
-        for (site, hasTry) in finder.found.reversed() {
+        for (site, via, hasTry) in finder.found.reversed() {
             // The `try` stays outside, on the helper, which rethrows: Swift
             // reads `try await x` as a try around the await. The call in the
             // closure needs one of its own.
@@ -64,7 +84,7 @@ public enum NetworkJitter {
             let body = hasTry ? original : "try " + original
             // In the parentheses, not trailing: in a `guard` or `if`
             // condition a trailing closure reads as the statement's body.
-            let held = "await \(helperName)(\(milliseconds), { \(body) })"
+            let held = "await \(helperName)(\(milliseconds), \(via ?? "nil"), { \(body) })"
             bytes.replaceSubrange(start..<end, with: Array(held.utf8))
         }
 
@@ -96,20 +116,55 @@ public enum NetworkJitter {
     }
 
     private final class Finder: SyntaxVisitor {
-        var found: [(site: AwaitExprSyntax, hasTry: Bool)] = []
+        /// `via` is the session the call is made on, when naming it again
+        /// costs nothing: a name or a chain of names, never a call.
+        var found: [(site: AwaitExprSyntax, via: String?, hasTry: Bool)] = []
 
         override func visit(_ node: AwaitExprSyntax) -> SyntaxVisitorContinueKind {
+            // `try await x.data(for:)` parses as an await around the call, or
+            // around a `try` around it.
             let inner = node.expression
-            let call = inner.as(FunctionCallExprSyntax.self)
-                ?? inner.as(TryExprSyntax.self)?.expression.as(FunctionCallExprSyntax.self)
-            if let call, NetworkJitter.isNetworkCall(call) {
-                found.append((node, inner.is(TryExprSyntax.self)))
+            if let call = NetworkJitter.networkCall(heading: inner) {
+                let base = call.calledExpression.as(MemberAccessExprSyntax.self)?.base
+                found.append((node, base.flatMap(NetworkJitter.plainName), inner.is(TryExprSyntax.self)))
                 // A call inside its arguments would be inside the closure
                 // already, and an edit inside an edit.
                 return .skipChildren
             }
             return .visitChildren
         }
+    }
+
+    /// The network call an awaited expression starts with: the call itself,
+    /// or what follows it — `.0`, `!`, `?.count` — read back to it. The whole
+    /// expression goes in the closure, so what follows still applies.
+    static func networkCall(heading expression: ExprSyntax) -> FunctionCallExprSyntax? {
+        if let call = expression.as(FunctionCallExprSyntax.self) {
+            if isNetworkCall(call) { return call }
+            return networkCall(heading: call.calledExpression)
+        }
+        if let member = expression.as(MemberAccessExprSyntax.self), let base = member.base {
+            return networkCall(heading: base)
+        }
+        if let attempt = expression.as(TryExprSyntax.self) { return networkCall(heading: attempt.expression) }
+        if let forced = expression.as(ForceUnwrapExprSyntax.self) { return networkCall(heading: forced.expression) }
+        if let chained = expression.as(OptionalChainingExprSyntax.self) { return networkCall(heading: chained.expression) }
+        if let subscripted = expression.as(SubscriptCallExprSyntax.self) { return networkCall(heading: subscripted.calledExpression) }
+        return nil
+    }
+
+    /// `session`, `self.session`, `URLSession.shared`: read twice, they are
+    /// the same thing. Anything else — a call, a subscript — is left unnamed.
+    static func plainName(_ expression: ExprSyntax) -> String? {
+        if let reference = expression.as(DeclReferenceExprSyntax.self) {
+            return reference.baseName.text
+        }
+        if expression.is(SuperExprSyntax.self) { return nil }
+        if let member = expression.as(MemberAccessExprSyntax.self), let base = member.base,
+           let name = plainName(base) {
+            return "\(name).\(member.declName.baseName.text)"
+        }
+        return nil
     }
 
     static func isNetworkCall(_ call: FunctionCallExprSyntax) -> Bool {

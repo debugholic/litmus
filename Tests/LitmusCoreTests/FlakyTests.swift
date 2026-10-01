@@ -60,6 +60,32 @@ struct FlakyTests {
     }
 
     /// After a failing suite run, failing alone says nothing new.
+    /// Run alone once, it is neither stable nor not: it was not run again.
+    @Test("sets a test that reached a server apart, and does not count it as passing")
+    func server() throws {
+        var lines = listing
+        lines += pass("reverse", 0, [("once", true)])
+        lines += pass("reverse", 1, [("leans", true)])
+        lines += ["SERVER\tApp.T/leans()/T.swift:9:2"]
+        lines += pass("reverse", 2, [("sometimes", true)])
+        lines += pass("reverse", 3, [("steady", true)])
+        for index in 0..<3 {
+            lines += pass("suite", index, [("steady", true), ("sometimes", true), ("once", true)])
+        }
+        lines += ["DONE"]
+        let run = run(lines)
+
+        let leans = try #require(run.verdicts.first { $0.name == "leans" })
+        #expect(leans.reachesServer)
+        #expect(!leans.isStable)
+        #expect(!leans.isUnstable)
+
+        let report = try FlakyReport(runs: [run], asked: 3).rendered(as: .plain)
+        #expect(report.contains("3 test(s) passed every time"))
+        #expect(report.contains("1 test(s) reached a server, so ran alone once and not again: leans"))
+        #expect(!report.contains("not stable"))
+    }
+
     @Test("reads failing alone only against a suite that always passed")
     func aloneNeedsSteadySuite() {
         var lines = listing
