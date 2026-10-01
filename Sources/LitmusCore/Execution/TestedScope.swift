@@ -1,4 +1,6 @@
 import Foundation
+import SwiftParser
+import SwiftSyntax
 
 /// The source files a scheme's tests are aimed at.
 ///
@@ -166,18 +168,37 @@ extension TestedScope {
     /// Swift Testing went to the batch, which reruns Swift Testing only, and
     /// every mutant only they would have caught came back a survivor. So a
     /// file that imports XCTest or Quick and subclasses anything counts too.
+    ///
+    /// Read from the parse, not the text: Litmus's own tests hold XCTest
+    /// cases in string literals, as fixtures, and a pattern over the text
+    /// took them for real ones and ran the target one process per mutant.
     static func declaresXCTestCase(in source: String) -> Bool {
-        if source.range(of: #":\s*XCTestCase\b"#, options: .regularExpression) != nil { return true }
+        let tree = Parser.parse(source: source)
 
-        let importsXCTest = source.range(
-            of: #"(?m)^\s*(?:@testable\s+|@preconcurrency\s+)*import\s+(?:XCTest|Quick)\b"#,
-            options: .regularExpression
-        ) != nil
-        let subclasses = source.range(
-            of: #"(?m)^\s*(?:(?:public|open|internal|final|private|fileprivate|@\w+)\s+)*class\s+\w+\s*:\s*\w"#,
-            options: .regularExpression
-        ) != nil
-        return importsXCTest && subclasses
+        var importsXCTest = false
+        var subclasses: [[String]] = []
+        for item in tree.statements {
+            if let declaration = item.item.as(ImportDeclSyntax.self),
+               let module = declaration.path.first?.name.text,
+               module == "XCTest" || module == "Quick" {
+                importsXCTest = true
+            }
+        }
+        final class Classes: SyntaxVisitor {
+            var inherited: [[String]] = []
+            override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind {
+                if let clause = node.inheritanceClause {
+                    inherited.append(clause.inheritedTypes.map { $0.type.trimmedDescription })
+                }
+                return .visitChildren
+            }
+        }
+        let classes = Classes(viewMode: .sourceAccurate)
+        classes.walk(tree)
+        subclasses = classes.inherited
+
+        if subclasses.contains(where: { $0.contains("XCTestCase") }) { return true }
+        return importsXCTest && !subclasses.isEmpty
     }
 
     /// Test target names from either `.xctestrun` layout.
