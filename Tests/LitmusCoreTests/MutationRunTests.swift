@@ -36,6 +36,10 @@ struct MutationRunTests {
         private(set) var doubleBookedLane = false
 
         private var busyLanes: Set<String> = []
+        /// Lanes running a mutant rather than the baseline, and how many
+        /// mutants have finished.
+        private var mutantLanes: Set<String> = []
+        private var mutantsEnded = 0
 
         func begin(lane: String, mutantSwitch: String?) {
             lock.lock()
@@ -44,6 +48,7 @@ struct MutationRunTests {
             if let mutantSwitch {
                 switchesRun.append(mutantSwitch)
                 lanesUsed.append(lane)
+                mutantLanes.insert(lane)
             }
 
             // A lane is one simulator. Two mutants on it at once would mean the
@@ -57,6 +62,7 @@ struct MutationRunTests {
             lock.lock()
             defer { lock.unlock() }
             busyLanes.remove(lane)
+            if mutantLanes.remove(lane) != nil { mutantsEnded += 1 }
         }
 
         /// Waits until `count` lanes are busy at once, or gives up.
@@ -64,25 +70,26 @@ struct MutationRunTests {
         /// Sleeping a fixed time instead made this a race: on a loaded machine
         /// three tasks that are meant to overlap simply did not, and the test
         /// failed for a reason that had nothing to do with the scheduler.
-        /// Giving up rather than failing here keeps the last, partial batch
-        /// from hanging the run.
+        /// The last batch is partial: it waits only for as many lanes as
+        /// there are mutants left of `total`, rather than for a lane that
+        /// will not fill and the whole limit with it.
         ///
         /// Awaited, as a real lane waits on its tests: blocking here held one
         /// of the few threads the tasks share, and on a three-core runner the
         /// third lane never got one to start on.
-        func awaitSaturation(_ count: Int, within seconds: TimeInterval) async {
+        func awaitSaturation(_ count: Int, of total: Int, within seconds: TimeInterval) async {
             let deadline = Date().addingTimeInterval(seconds)
 
             while Date() < deadline {
-                if busy(count) { return }
+                if busy(count, of: total) { return }
                 try? await Task.sleep(nanoseconds: 1_000_000)
             }
         }
 
-        private func busy(_ count: Int) -> Bool {
+        private func busy(_ count: Int, of total: Int) -> Bool {
             lock.lock()
             defer { lock.unlock() }
-            return busyLanes.count >= count
+            return busyLanes.count >= min(count, total - mutantsEnded)
         }
     }
 
@@ -95,6 +102,8 @@ struct MutationRunTests {
         let duration: TimeInterval
         /// Lanes to wait for before returning, so overlap is not left to chance.
         var saturate: Int = 0
+        /// Mutants in the run, so the last batch knows how many lanes it fills.
+        var total: Int = 0
 
         func build(lane: String) throws -> BuiltTests { BuiltTests() }
 
@@ -110,7 +119,9 @@ struct MutationRunTests {
             ledger.begin(lane: lane, mutantSwitch: mutantSwitch)
             defer { ledger.end(lane: lane) }
 
-            if saturate > 0 { await ledger.awaitSaturation(saturate, within: 5) }
+            // Mutants only: the baseline runs alone, so it never sees the
+            // lanes fill, and waited out the whole limit every time.
+            if saturate > 0, mutantSwitch != nil { await ledger.awaitSaturation(saturate, of: total, within: 5) }
             if duration > 0 { try await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000)) }
 
             guard let mutantSwitch else { return baseline }
@@ -147,7 +158,8 @@ struct MutationRunTests {
                     baseline: baseline,
                     outcomes: outcomes,
                     duration: duration,
-                    saturate: saturate
+                    saturate: saturate,
+                    total: mutants.count
                 ),
                 lanes: lanes
             )
