@@ -246,6 +246,17 @@ the test that expects "ab" failed 5 of 30 runs with a stub that answers at
 once, and 13 of 30 held back. With the stale answer ignored, it passed all 30
 held back.
 
+A test that reaches a server runs alone once and not again: each rerun
+would be another request to it, and a server that is slow, down or limiting
+says nothing about the test. A request counts as reaching a server when no
+`URLProtocol` of the project's takes it — one in the session's configuration,
+or one registered for the shared session. Such tests are listed apart, and
+`--allow-server` reruns them anyway.
+
+```
+1 test(s) reached a server, so ran alone once and not again: refreshesFeed()
+```
+
 It exits with 2 when a test is not stable. Swift Testing only: XCTest cases
 are not rerun.
 
