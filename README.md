@@ -11,7 +11,7 @@
   <a href="https://github.com/debugholic/litmus/actions/workflows/test.yml"><img src="https://github.com/debugholic/litmus/actions/workflows/test.yml/badge.svg" alt="test"></a>
   <a href="https://github.com/debugholic/litmus/releases/latest"><img src="https://img.shields.io/github/v/release/debugholic/litmus" alt="release"></a>
   <a href="https://github.com/debugholic/homebrew-tap"><img src="https://img.shields.io/badge/homebrew-debugholic%2Ftap-FBB040?logo=homebrew&logoColor=white" alt="Homebrew"></a>
-  <img src="https://img.shields.io/badge/Swift-5.9%2B-F05138?logo=swift&logoColor=white" alt="Swift 5.9+">
+  <img src="https://img.shields.io/badge/Swift-6.0%2B-F05138?logo=swift&logoColor=white" alt="Swift 6.0+">
   <img src="https://img.shields.io/badge/macOS-13%2B-000000?logo=apple&logoColor=white" alt="macOS 13+">
   <a href="LICENSE"><img src="https://img.shields.io/github/license/debugholic/litmus" alt="MIT license"></a>
 </p>
