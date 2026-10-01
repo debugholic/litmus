@@ -135,7 +135,11 @@ public enum Batch {
                 arguments.filter = filter
                 if let stream {
                     arguments.eventStreamOutputPath = stream
+                    #if compiler(>=6.2)
                     arguments.eventStreamSchemaVersion = "0"
+                    #else
+                    arguments.eventStreamVersion = 0
+                    #endif
                 }
                 return await __swiftPMEntryPoint(passing: arguments)
             }
@@ -241,7 +245,11 @@ public enum Batch {
             var arguments = __CommandLineArguments_v0()
             arguments.listTests = true
             arguments.eventStreamOutputPath = listing
+            #if compiler(>=6.2)
             arguments.eventStreamSchemaVersion = "0"
+            #else
+            arguments.eventStreamVersion = 0
+            #endif
             let _: CInt = await __swiftPMEntryPoint(passing: arguments)
 
             var tests: [String] = []
