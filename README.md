@@ -236,15 +236,20 @@ took 2m 3s — build 19s, launch 1m 29s, alone 0.1s, together 100 × 0.1s (0.0s�
 
 A stub answers at once and in order, every run, so a test that only passes
 when the network does too never shows it. In the copy it builds, `litmus
-flaky` holds every awaited `URLSession` response back a random while, up to
-300 ms: the call still goes wherever it went — a stub, a mock, a server — and
-only its answer is late, by a different amount each time. No request is
-added. `--jitter <ms>` sets the most it waits, and `--jitter 0` turns it off.
+flaky` holds every `URLSession` answer back a random while, up to 300 ms —
+awaited, as the value of an `async let`, through a completion handler or
+through a `dataTaskPublisher`: the call still goes wherever it went — a stub,
+a mock, a server — and only its answer is late, by a different amount each
+time. No request is added. `--jitter <ms>` sets the most it waits, and
+`--jitter 0` turns it off. A task with no handler answers its delegate, which
+is left alone.
 
 On a search that shows whichever answer comes last, typing "a" then "ab",
 the test that expects "ab" failed 5 of 30 runs with a stub that answers at
 once, and 13 of 30 held back. With the stale answer ignored, it passed all 30
-held back.
+held back. The same search through a completion handler failed 2 of 20 runs
+and 11 held back, and through Combine 2 and 9; fixed, with a check for the
+latest query and with `switchToLatest`, both passed all 30 held back.
 
 A test that reaches a server runs alone once and not again: each rerun
 would be another request to it, and a server that is slow, down or limiting
