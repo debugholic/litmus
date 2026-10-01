@@ -99,7 +99,11 @@ public enum FlakyDriver {
             var listing = __CommandLineArguments_v0()
             listing.listTests = true
             listing.eventStreamOutputPath = stream
+            #if compiler(>=6.2)
             listing.eventStreamSchemaVersion = "0"
+            #else
+            listing.eventStreamVersion = 0
+            #endif
             try? FileManager.default.removeItem(atPath: stream)
             let _: CInt = await __swiftPMEntryPoint(passing: listing)
 
@@ -148,7 +152,11 @@ public enum FlakyDriver {
                 arguments.quiet = true
                 arguments.filter = filter
                 arguments.eventStreamOutputPath = stream
+                #if compiler(>=6.2)
                 arguments.eventStreamSchemaVersion = "0"
+                #else
+                arguments.eventStreamVersion = 0
+                #endif
                 try? FileManager.default.removeItem(atPath: stream)
                 let _: CInt = await __swiftPMEntryPoint(passing: arguments)
 
