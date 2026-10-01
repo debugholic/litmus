@@ -29,7 +29,7 @@ struct DeviceOptions: ParsableArguments {
 struct HarnessOptions: ParsableArguments {
     @OptionGroup var device: DeviceOptions
 
-    @Option(help: "How many mutants to run at once, each on a simulator of its own.")
+    @Option(help: "How many mutants to run at once: each on a simulator of its own, or for a Swift package, in a copy of its own.")
     var workers: Int = 1
 
     /// The combinations that cannot be right whatever the project, refused
@@ -101,21 +101,8 @@ struct HarnessOptions: ParsableArguments {
             )
 
         case .swiftpm:
-            // Two `swift test` processes in one package directory contend over
-            // .build, and the damage is not a slow run but a wrong one: the
-            // same mutant came back killed in parallel and survived in three
-            // sequential runs, and a baseline that had passed a minute earlier
-            // failed outright. A score reported too high is worse than no
-            // score, so this refuses rather than warns.
-            //
-            // Running each worker against its own copy of the project would
-            // make it sound, and is the way to lift this.
-            guard workers == 1 else {
-                throw ValidationError(
-                    "a Swift package runs one mutant at a time: "
-                        + "parallel runs share .build and report wrong verdicts"
-                )
-            }
+            // Each worker past the first runs in a clone of the built
+            // package, so none shares another's .build.
             // Whoever named a device expected the tests to run on one.
             guard device.destination == nil, device.scheme == nil else {
                 throw ValidationError(
@@ -123,7 +110,7 @@ struct HarnessOptions: ParsableArguments {
                 )
             }
 
-            return (SwiftPackage(workingDirectory: project), ["worker 1"])
+            return (SwiftPackage(workingDirectory: project, workers: workers), SwiftPackage.lanes(workers))
         }
     }
 }

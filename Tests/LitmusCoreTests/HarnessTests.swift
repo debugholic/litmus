@@ -153,6 +153,58 @@ struct HarnessTests {
         #expect(rebuilt.artifact == nil)
     }
 
+    /// Each worker past the first runs in a clone of the built package, so
+    /// none shares another's .build.
+    @Test("gives each worker past the first a clone of the built package, and runs it there")
+    func swiftPackageWorkers() async throws {
+        let tool = try FakeTool()
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("litmus-workers-\(UUID().uuidString)")
+        let copy = root.appendingPathComponent("package")
+        try FileManager.default.createDirectory(at: copy.appendingPathComponent(".build"), withIntermediateDirectories: true)
+        try "built".write(to: copy.appendingPathComponent(".build/product"), atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let package = SwiftPackage(executable: tool.path, workingDirectory: copy, buildSystem: [], workers: 3)
+        #expect(SwiftPackage.lanes(3) == ["worker 1", "worker 2", "worker 3"])
+        _ = try await package.build(lane: "worker 1")
+
+        for worker in 2...3 {
+            let clone = root.appendingPathComponent("package-worker\(worker)")
+            #expect(try String(contentsOf: clone.appendingPathComponent(".build/product"), encoding: .utf8) == "built")
+        }
+        #expect(package.directory(for: "worker 1") == copy)
+        #expect(package.directory(for: "worker 3") == root.appendingPathComponent("package-worker3"))
+    }
+
+    /// A test target is aimed at the targets it depends on, as the package
+    /// describes itself.
+    @Test("reads which modules each test target tests from the package's description")
+    func swiftPackageScope() throws {
+        let description = """
+        {"name": "Calc", "targets": [
+          {"name": "CalcTests", "type": "test", "path": "Tests/CalcTests",
+           "sources": ["CalcTests.swift"], "target_dependencies": ["Calc"]},
+          {"name": "Calc", "type": "library", "path": "Sources/Calc", "sources": ["Calc.swift", "More/Money.swift"]},
+          {"name": "calc-cli", "type": "executable", "path": "Sources/calc-cli", "sources": ["main.swift"],
+           "target_dependencies": ["Calc"]}
+        ]}
+        """
+        let root = URL(fileURLWithPath: "/p")
+        let scope = try #require(SwiftPackage.scope(from: Data(description.utf8), root: root))
+
+        #expect(Set(scope.modules) == ["Calc", "calc-cli"])
+        #expect(scope.contains("/p/Sources/Calc/More/Money.swift"))
+        #expect(scope.module(of: "/p/Sources/calc-cli/main.swift") == "calc-cli")
+
+        let tests = try #require(scope.testTargets.first)
+        #expect(scope.testTargets.count == 1)
+        #expect(tests.name == "CalcTests")
+        #expect(tests.files == ["/p/Tests/CalcTests/CalcTests.swift"])
+        #expect(tests.aims(at: "/p/Sources/Calc/Calc.swift"))
+        #expect(!tests.aims(at: "/p/Sources/calc-cli/main.swift"))
+    }
+
     // MARK: - xcodebuild
 
     /// `man xcodebuild` documents `TEST_RUNNER_<VAR>` as the way to pass a

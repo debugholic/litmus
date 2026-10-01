@@ -65,6 +65,20 @@ struct TestSourcesTests {
 
     /// Quick specs and cases on a project's own base class are XCTest too;
     /// read as Swift Testing, they were never run against a mutant.
+    /// Litmus's own tests hold XCTest cases in strings, as fixtures.
+    @Test("does not take an XCTest case in a string or a comment for one")
+    func xctestInAString() {
+        #expect(!TestedScope.declaresXCTestCase(in: #"""
+        import Testing
+
+        // final class Old: XCTestCase {}
+        @Test func reads() {
+            let fixture = "final class FeedTests: XCTestCase { func testA() {} }"
+            #expect(!fixture.isEmpty)
+        }
+        """#))
+    }
+
     @Test("counts a Quick spec and a subclass of a base case as XCTest")
     func xctestInDisguise() {
         #expect(TestedScope.declaresXCTestCase(in: """

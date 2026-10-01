@@ -25,15 +25,67 @@ public struct SwiftPackage: Sendable, TestHarness {
     /// against 1 in 1. Every call takes it, because `--skip-build` looks for
     /// the products where its own build system put them.
     let buildSystem: [String]
+    /// How many mutants run at once, each in a package of its own.
+    ///
+    /// Two `swift test` processes in one package directory contend over
+    /// .build, and the damage was not a slow run but a wrong one: a mutant
+    /// came back killed in parallel and survived in three sequential runs.
+    /// So each worker past the first runs in a clone of the built working
+    /// copy, .build and all, made once the build is done.
+    let workers: Int
 
     public init(
         executable: String = "/usr/bin/swift",
         workingDirectory: URL,
-        buildSystem: [String]? = nil
+        buildSystem: [String]? = nil,
+        workers: Int = 1
     ) {
         self.executable = executable
         self.workingDirectory = workingDirectory
         self.buildSystem = buildSystem ?? Self.nativeBuildSystem(executable: executable)
+        self.workers = max(1, workers)
+    }
+
+    /// `worker 1`, `worker 2`, …: the names the run gives its lanes.
+    public static func lanes(_ workers: Int) -> [String] {
+        (1...max(1, workers)).map { "worker \($0)" }
+    }
+
+    /// Where a lane's tests run: the working copy for the first, a clone
+    /// beside it for each after.
+    func directory(for lane: String) -> URL {
+        guard let number = Int(lane.split(separator: " ").last ?? ""), number > 1 else {
+            return workingDirectory
+        }
+        return Self.clone(of: workingDirectory, worker: number)
+    }
+
+    static func clone(of directory: URL, worker: Int) -> URL {
+        directory.deletingLastPathComponent()
+            .appendingPathComponent("\(directory.lastPathComponent)-worker\(worker)")
+    }
+
+    /// Each worker's clone, made again from the build just done. A clone on
+    /// APFS shares the original's blocks, so it takes a moment and next to
+    /// no space; elsewhere it is a copy.
+    private func cloneForWorkers() async throws {
+        guard workers > 1 else { return }
+        for worker in 2...workers {
+            let clone = Self.clone(of: workingDirectory, worker: worker)
+            try? FileManager.default.removeItem(at: clone)
+            let (cloned, status) = try await run(
+                executable: "/bin/cp", arguments: ["-cR", workingDirectory.path, clone.path]
+            )
+            if status != 0 {
+                try? FileManager.default.removeItem(at: clone)
+                let (copied, copyStatus) = try await run(
+                    executable: "/bin/cp", arguments: ["-R", workingDirectory.path, clone.path]
+                )
+                guard copyStatus == 0 else {
+                    throw Failure(description: "could not copy the package for worker \(worker):\n\(cloned)\n\(copied)")
+                }
+            }
+        }
     }
 
     /// Read from `swift build --help`, which lists the build systems it takes.
@@ -59,6 +111,7 @@ public struct SwiftPackage: Sendable, TestHarness {
         guard status == 0 else {
             throw BuildFailure(log: log)
         }
+        try await cloneForWorkers()
 
         // Nothing to carry: `--skip-build` finds the products by itself.
         return BuiltTests()
@@ -83,7 +136,7 @@ public struct SwiftPackage: Sendable, TestHarness {
         let output = try await Subprocess.run(
             executable: executable,
             arguments: ["test", "--skip-build"] + buildSystem,
-            directory: workingDirectory,
+            directory: directory(for: lane),
             environment: environment,
             timeout: timeout
         )
