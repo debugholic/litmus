@@ -34,8 +34,8 @@ public enum NetworkJitter {
     private func \(helperName)<T>(
         _ upTo: UInt64,
         isolation: isolated (any Actor)? = #isolation,
-        _ body: () async throws -> T
-    ) async rethrows -> T {
+        _ body: () async throws -> sending T
+    ) async rethrows -> sending T {
         let value = try await body()
         try? await Task.sleep(nanoseconds: UInt64.random(in: 0...upTo) * 1_000_000)
         return value
