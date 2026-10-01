@@ -77,6 +77,7 @@ public struct Xcodebuild: Sendable, TestHarness {
         let (log, status) = try await run(arguments: [
             "build-for-testing",
             "-scheme", scheme,
+        ] + container + [
             "-destination", destination,
             "-derivedDataPath", derivedDataPath.path,
             Self.continueAfterErrors,
@@ -170,6 +171,7 @@ public struct Xcodebuild: Sendable, TestHarness {
         let (log, status) = try await run(arguments: [
             "test",
             "-scheme", scheme,
+        ] + container + [
             "-destination", lane,
             "-derivedDataPath", derivedDataPath.path,
             "-enableCodeCoverage", "YES",
@@ -182,6 +184,18 @@ public struct Xcodebuild: Sendable, TestHarness {
         }
 
         return try await lastCoverage()
+    }
+
+    /// The workspace at the root, named, when there is one.
+    ///
+    /// Left to itself, xcodebuild in a folder holding a workspace and a
+    /// project — Tuist's layout — opens the project, while the scheme Litmus
+    /// writes goes in the workspace, where `AllTestsScheme` puts it: the
+    /// build stopped at a scheme it could not find.
+    var container: [String] {
+        let entries = (try? FileManager.default.contentsOfDirectory(atPath: workingDirectory.path)) ?? []
+        guard let workspace = entries.sorted().first(where: { $0.hasSuffix(".xcworkspace") }) else { return [] }
+        return ["-workspace", workspace]
     }
 
     /// Keeps building the targets that can be built after one fails, so a
