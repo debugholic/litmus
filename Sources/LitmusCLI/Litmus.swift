@@ -129,7 +129,13 @@ struct Run: AsyncParsableCommand {
             operators: SchemataInjector().operators,
             harness: (testHarness as? Xcodebuild).map { "xcode, scheme \($0.scheme), \(width)" } ?? "swift test, \(width)"
         )
-        let report = Report(summary, workingCopy: working, project: plan == nil ? project : working, run: run)
+        let report = Report(
+            summary,
+            workingCopy: working,
+            project: plan == nil ? project : working,
+            run: run,
+            flaky: ReportPages.linkToFlaky(from: working)
+        )
         let rendered = try report.rendered(as: format)
 
         if let output {
@@ -141,8 +147,9 @@ struct Run: AsyncParsableCommand {
 
         // Always kept, beside the working copy's source. A run is an hour on
         // a large project, and its results should outlive the terminal.
-        let html = working.appendingPathComponent("litmus-report.html")
+        let html = working.appendingPathComponent(ReportPages.mutation)
         try report.rendered(as: .html).write(to: html, atomically: true, encoding: .utf8)
+        try ReportPages.reveal(in: ReportPages.flakyFolder(besides: working).appendingPathComponent(ReportPages.flaky))
         try report.rendered(as: .stryker).write(
             to: working.appendingPathComponent("litmus-report.json"),
             atomically: true,

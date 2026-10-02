@@ -15,12 +15,21 @@ public struct StrykerReport: Sendable {
     let workingCopy: URL
     let project: URL
     let run: RunInfo?
+    /// To the flaky run's page, beside "Show details".
+    let flaky: ReportPages.Link?
 
-    public init(_ summary: MutationRun.Summary, workingCopy: URL, project: URL, run: RunInfo? = nil) {
+    public init(
+        _ summary: MutationRun.Summary,
+        workingCopy: URL,
+        project: URL,
+        run: RunInfo? = nil,
+        flaky: ReportPages.Link? = nil
+    ) {
         self.summary = summary
         self.workingCopy = workingCopy
         self.project = project
         self.run = run
+        self.flaky = flaky
     }
 
     public func json() throws -> String {
@@ -77,8 +86,8 @@ public struct StrykerReport: Sendable {
         var parts: [String] = []
 
         parts.append("""
-        <div class="top"><h1>Summary<span>Litmus</span></h1>\
-        <a class="button" href="#mutant">Show details →</a></div>
+        <div class="top"><h1>Summary<span>Litmus</span></h1><div class="actions">\
+        <a class="button" href="#mutant">Show details →</a>\(flaky?.button("Flaky →") ?? "")</div></div>
         """)
 
         // The two scores, in cards coloured by the report's own thresholds.
@@ -360,6 +369,8 @@ public struct StrykerReport: Sendable {
     .litmus .top { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
     .litmus .button, .litmus-back .button { display: inline-block; padding: 8px 14px; border: 1px solid var(--line);
       border-radius: 6px; font-weight: 600; text-decoration: none; }
+    .litmus .button[hidden] { display: none; }
+    .litmus .actions { display: flex; gap: 8px; flex-wrap: wrap; }
     .litmus .button:hover, .litmus-back .button:hover { background: var(--head); text-decoration: none; }
     .litmus-back { padding: 16px 0 0; font: 14px/1.5 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif; }
     .litmus-back .button { --line: oklch(0.92 0.004 286.32); --head: oklch(0.967 0.001 286.375); color: oklch(0.274 0.006 286.033); }

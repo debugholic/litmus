@@ -54,6 +54,9 @@ struct FlakyTests {
         #expect(byName["가끔 실패한다"]?.reasons == ["fails 1 of 4 suite runs"])
         #expect(byName["leans"]?.reasons == ["fails unless a test listed before it runs first"])
         #expect(byName["once"]?.reasons == ["fails when run again on its own, after the suite"])
+        #expect(byName["가끔 실패한다"]?.fixes == [FlakyRun.Fix.timing])
+        #expect(byName["leans"]?.fixes == [FlakyRun.Fix.setUp])
+        #expect(byName["once"]?.fixes == [FlakyRun.Fix.leftBehind])
         #expect(run(lines).suiteRuns == 4)
         #expect(run(Array(lines.prefix(listing.count + 6))).progress(of: 4) == "alone 2/4")
         #expect(run(lines).finished)
@@ -84,6 +87,31 @@ struct FlakyTests {
         #expect(report.contains("3 test(s) passed every time"))
         #expect(report.contains("1 test(s) reached a server, so ran alone once and not again: leans"))
         #expect(!report.contains("not stable"))
+    }
+
+    @Test("writes a page with what was not stable, what reached a server and what passed")
+    func htmlPage() throws {
+        var lines = listing
+        lines += pass("reverse", 0, [("once", true)])
+        lines += pass("reverse", 1, [("leans", true)])
+        lines += ["SERVER\tApp.T/leans()/T.swift:9:2"]
+        lines += pass("reverse", 2, [("sometimes", true)])
+        lines += pass("reverse", 3, [("steady", true)])
+        lines += pass("suite", 0, [("steady", true), ("sometimes", false), ("once", true)])
+        lines += pass("suite", 1, [("steady", true), ("sometimes", true), ("once", true)])
+        lines += ["DONE"]
+
+        let page = try FlakyReport(runs: [run(lines)], asked: 2, calm: ["calm()"]).rendered(as: .html)
+
+        #expect(page.hasPrefix("<!DOCTYPE html>"))
+        #expect(page.contains("<h2>Not stable</h2>"))
+        #expect(page.contains("가끔 실패한다"))
+        #expect(page.contains("fails 1 of 2 suite runs"))
+        #expect(page.contains(FlakyRun.Fix.timing))
+        #expect(page.contains(FlakyRun.Fix.server))
+        #expect(page.contains("<h2>Reached a server</h2>"))
+        #expect(page.contains("<h2>Passed every time</h2>"))
+        #expect(page.contains("calm()"))
     }
 
     @Test("reads failing alone only against a suite that always passed")

@@ -38,7 +38,7 @@ struct Flaky: AsyncParsableCommand {
     """)
     var allowServer = false
 
-    @Option(help: "Report format: plain or json.")
+    @Option(help: "Report format: plain, json or html.")
     var format: FlakyReport.Format = .plain
 
     @Option(help: "Write the report here instead of stdout.")
@@ -115,9 +115,7 @@ struct Flaky: AsyncParsableCommand {
         // deletes the other's files; and not under its name, so one run
         // clearing up after an earlier one does not stop this one.
         let mutationCopy = WorkingCopy.location(for: project)
-        let working = mutationCopy.deletingLastPathComponent()
-            .appendingPathComponent("flaky")
-            .appendingPathComponent(mutationCopy.lastPathComponent)
+        let working = ReportPages.flakyFolder(besides: mutationCopy)
 
         Interruption.install()
         try RunLock.acquire(for: working)
@@ -213,7 +211,8 @@ struct Flaky: AsyncParsableCommand {
             run: RunInfo(
                 date: startedAt, commit: git.commit, branch: git.branch, version: Litmus.version,
                 operators: [], harness: "xcode, scheme \(xcodebuild.scheme), \(device.destination == nil ? "1 simulator" : lane)"
-            )
+            ),
+            mutation: ReportPages.linkToMutation(from: working)
         )
         let rendered = try report.rendered(as: format)
 
@@ -223,6 +222,18 @@ struct Flaky: AsyncParsableCommand {
         } else {
             print("\n" + rendered)
         }
+
+        // Kept whatever was printed, as a mutation run keeps its own: a page
+        // to open, and the same in JSON for a pipeline to read.
+        let page = working.appendingPathComponent(ReportPages.flaky)
+        try report.rendered(as: .html).write(to: page, atomically: true, encoding: .utf8)
+        try ReportPages.reveal(in: mutationCopy.appendingPathComponent(ReportPages.mutation))
+        try report.rendered(as: .json).write(
+            to: working.appendingPathComponent("litmus-flaky-report.json"),
+            atomically: true,
+            encoding: .utf8
+        )
+        print("\n  report: \(Run.link(to: page))")
 
         // In GitHub Actions, the summary on the job's page and each test
         // that is not stable on the line it is declared.

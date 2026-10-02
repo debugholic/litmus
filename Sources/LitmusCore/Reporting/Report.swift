@@ -21,17 +21,26 @@ public struct Report: Sendable {
     let project: URL?
     /// What was run, when and on what.
     let run: RunInfo?
+    /// To the flaky run's page, from the HTML report's summary.
+    let flaky: ReportPages.Link?
 
-    public init(_ summary: MutationRun.Summary, workingCopy: URL? = nil, project: URL? = nil, run: RunInfo? = nil) {
+    public init(
+        _ summary: MutationRun.Summary,
+        workingCopy: URL? = nil,
+        project: URL? = nil,
+        run: RunInfo? = nil,
+        flaky: ReportPages.Link? = nil
+    ) {
         self.summary = summary
         self.workingCopy = workingCopy
         self.project = project
         self.run = run
+        self.flaky = flaky
     }
 
     private var stryker: StrykerReport {
         let root = workingCopy ?? URL(fileURLWithPath: "/")
-        return StrykerReport(summary, workingCopy: root, project: project ?? root, run: run)
+        return StrykerReport(summary, workingCopy: root, project: project ?? root, run: run, flaky: flaky)
     }
 
     /// `took 12m 28s — build 1m 5s, launch and baseline 40s, mutants 10m 43s`
