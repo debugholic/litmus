@@ -128,7 +128,7 @@ struct TestSuiteOutcomeTests {
     @Test("a runner that never launched is an error, not a kill")
     func launchFailure() {
         let log = """
-        2026-09-28 11:46:08.499 xcodebuild[79954:468276] [MT] IDELaunchReport: Launching HackersTests Finished with error: Process spawn via launchd failed.
+        2026-09-28 11:46:08.499 xcodebuild[79954:468276] [MT] IDELaunchReport: Launching AppTests Finished with error: Process spawn via launchd failed.
         Testing failed:
         ** TEST EXECUTE FAILED **
         """
