@@ -30,7 +30,7 @@ jobs:
     # The most a GitHub-hosted runner gives a job.
     timeout-minutes: 360
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build
         run: swift build -c release
@@ -62,7 +62,7 @@ jobs:
 
       - name: Keep the logs
         if: failure() || cancelled()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: litmus-diagnostics
           path: diagnostics/
@@ -73,10 +73,11 @@ jobs:
       - name: Write the badge
         run: |
           mkdir -p badge
-          jq '(.score) as $s | {
+          # Coloured by the number it shows: 79.6 read "80%" in yellow.
+          jq '(.score | if . == null then null else round end) as $s | {
                 schemaVersion: 1,
                 label: "litmus score",
-                message: (if $s == null then "—" else "\($s | round)%" end),
+                message: (if $s == null then "—" else "\($s)%" end),
                 color: (if $s == null then "lightgrey"
                         elif $s >= 80 then "brightgreen"
                         elif $s >= 60 then "yellow"
