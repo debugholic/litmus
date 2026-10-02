@@ -3,7 +3,7 @@ import Foundation
 /// What `litmus flaky` found, over every test target it ran.
 public struct FlakyReport: Sendable {
     public enum Format: String, Sendable, CaseIterable {
-        case plain, json
+        case plain, json, html
     }
 
     public let runs: [FlakyRun]
@@ -18,6 +18,8 @@ public struct FlakyReport: Sendable {
     public let build: TimeInterval
     public let duration: TimeInterval
     public let run: RunInfo?
+    /// Back to the mutation run's page, from the HTML report.
+    public let mutation: ReportPages.Link?
 
     public init(
         runs: [FlakyRun],
@@ -27,7 +29,8 @@ public struct FlakyReport: Sendable {
         calm: [String] = [],
         build: TimeInterval = 0,
         duration: TimeInterval = 0,
-        run: RunInfo? = nil
+        run: RunInfo? = nil,
+        mutation: ReportPages.Link? = nil
     ) {
         self.runs = runs
         self.skipped = skipped
@@ -37,6 +40,7 @@ public struct FlakyReport: Sendable {
         self.build = build
         self.duration = duration
         self.run = run
+        self.mutation = mutation
     }
 
     /// Every test that is not stable, with its target.
@@ -55,6 +59,7 @@ public struct FlakyReport: Sendable {
         switch format {
         case .plain: return plain()
         case .json: return try json()
+        case .html: return html()
         }
     }
 

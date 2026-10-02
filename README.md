@@ -234,6 +234,11 @@ in one process:
 took 2m 3s — build 19s, launch 1m 29s, alone 0.1s, together 100 × 0.1s (0.0s–1.9s)
 ```
 
+Whatever it prints, it keeps the report as a page, `litmus-flaky-report.html`,
+with what to look for beside each test that is not stable, and the same in
+JSON. When the project has a mutation report too, each page has a button to
+the other.
+
 A stub answers at once and in order, every run, so a test that only passes
 when the network does too never shows it. In the copy it builds, `litmus
 flaky` holds every `URLSession` answer back a random while, up to 300 ms —

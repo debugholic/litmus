@@ -148,12 +148,35 @@ public struct FlakyRun: Sendable {
         /// It reached a server when run alone, and was not run again: it is
         /// neither stable nor not.
         public var reachesServer = false
+        /// What to look for in the test, for each reason it is not stable.
+        public var fixes: [String] = []
 
         public var isStable: Bool { reasons.isEmpty && !reachesServer }
         public var isUnstable: Bool { !reasons.isEmpty }
 
         /// `Module.Suite/function()/File.swift:12:5` gives `File.swift`.
         public var file: String? { TestRef(id: test, name: name).file }
+    }
+
+    /// Where to look, for each way a test is not stable: the report says
+    /// what happened, and these what usually makes it happen.
+    public enum Fix {
+        public static let timing = "Wait for what it checks, not for time: await the work, or a confirmation, "
+            + "rather than sleeping. A test that reaches the network may lean on the answer coming fast "
+            + "or in order; answer it from a stub."
+        public static let ownState = "Give it state of its own — a new instance, UserDefaults(suiteName:), "
+            + "a temporary folder — rather than a shared one a test leaves changed."
+        public static let broken = "Not flaky: it fails. Fix it as any failing test."
+        public static let setUp = "Set up in the test what it now takes from a test run before it."
+        public static let leftBehind = "Reset, or hand in, what the suite leaves behind: a singleton, "
+            + "UserDefaults.standard, a file, a cache."
+        public static let stopped = "A run stopped while it ran: see what was cut short, and run it alone in Xcode."
+        public static let hung = "It waits for something that never comes: a continuation never resumed, "
+            + "a lock taken twice, the main actor waiting on itself."
+        public static let crashed = "It crashed: a forced unwrap, a precondition, an index out of range. "
+            + "Run it alone in Xcode to see where."
+        /// For a test that reached a server, so it can be run again.
+        public static let server = "Hand the code a URLSession, and in the test one whose URLProtocol answers."
     }
 
     public var verdicts: [Verdict] {
@@ -165,33 +188,42 @@ public struct FlakyRun: Sendable {
 
             let runs = grouped ? "runs together" : "suite runs"
             var reasons: [String] = []
+            var fixes: [String] = []
             if failed > 0, failed < suite.count {
                 reasons.append("fails \(failed) of \(suite.count) \(runs)")
+                fixes.append(Fix.timing)
             } else if failed > 0, mine.contains(where: { $0.phase == .reverse && $0.passed }) {
                 // It passed once, early, and never again: a test that passes
                 // the first time only, or one another test spoils.
                 reasons.append("passes on its first run, then fails every one of the \(runs) — a test run before it leaves state behind")
+                fixes.append(Fix.ownState)
             } else if failed > 0 {
                 reasons.append("fails every time")
+                fixes.append(Fix.broken)
             }
             // Read only against a suite that passed every time: after a
             // failing run, failing alone says nothing new.
             if steady, mine.contains(where: { $0.phase == .reverse && !$0.passed }) {
                 reasons.append("fails unless a test listed before it runs first")
+                fixes.append(Fix.setUp)
             }
             if steady, mine.contains(where: { $0.phase == .again && !$0.passed }) {
                 reasons.append("fails when run again on its own, after the suite")
+                fixes.append(Fix.leftBehind)
             }
             // A run it did not end in is one it neither passed nor failed,
             // and read as neither it would hide a run that went wrong.
             if !suite.isEmpty, suite.count < suiteRuns {
                 reasons.append("ended in only \(suite.count) of \(suiteRuns) \(runs)")
+                fixes.append(Fix.stopped)
             }
             if stoppedIn == test, let stop {
                 reasons.append(stop.hung ? "hung when run on its own" : "took the process down when run on its own")
+                fixes.append(stop.hung ? Fix.hung : Fix.crashed)
             }
 
             var verdict = Verdict(test: test, name: names[test] ?? test, failed: failed, ran: suite.count, reasons: reasons)
+            verdict.fixes = fixes
             verdict.reachesServer = servers.contains(test) && suite.isEmpty
             return verdict
         }
