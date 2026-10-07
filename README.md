@@ -54,7 +54,8 @@ $ litmus
 In a project directory, that is the whole command. Litmus works out the rest:
 whether the tests need a simulator, which tests there are, and which simulator
 to use. It mutates the whole tree; `--since <ref>` keeps only the lines changed
-since that ref, which is what fits inside a review:
+since that ref, which is what fits inside a review, and `--changed` only what
+is not committed yet:
 
 ```
 $ litmus --since origin/develop
@@ -154,11 +155,14 @@ for a nightly job; for a review it is thousands of mutants on code nobody
 touched, and their verdicts were settled on the last run. `--since
 origin/develop` keeps the lines changed since that ref, taken line by line
 against the merge base, and reaches the working tree so uncommitted work
-counts.
+counts. `--changed` keeps what is not committed yet, new files whole: the edit
+in front of you. A pipeline's checkout has nothing uncommitted, so there it is
+`--since` with the branch's base.
 
 ```
 litmus                 # the whole tree
 litmus --since main    # only what changed since main
+litmus --changed       # only what is not committed yet
 litmus --only Checkout # only paths containing this
 ```
 
@@ -214,17 +218,19 @@ build for this machine whatever else is true of it.
 ```
 litmus flaky               # every test
 litmus flaky --since main  # only the tests changed since main
+litmus flaky --changed     # only the tests not committed yet
 ```
 
-With `--since`, before building, it follows what each changed test calls
-through the project's sources, and keeps the tests that reach something that
-can vary: a task, a timer, the clock, chance, `UserDefaults`, a shared
-instance. When none does, it stops there, without a build. The rest run on one
-simulator, in one process:
+With `--since` or `--changed`, before building, it follows what each changed
+test calls through the project's sources, and keeps the tests that reach
+something that can vary: a task, a timer, the clock, chance, `UserDefaults`, a
+shared instance. When none does, it stops there, without a build. The rest run
+on one simulator, in one process:
 
 1. each alone, last first, before anything else — one that needs another
    test to run first fails here
-2. together, 10 times (100 with `--since`) — one that fails at random
+2. together, 10 times (100 with `--since` or `--changed`) — one that fails
+   at random
 3. each alone again — one that depends on state the others left behind
 
 ```

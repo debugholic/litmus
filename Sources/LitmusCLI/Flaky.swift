@@ -14,11 +14,18 @@ struct Flaky: AsyncParsableCommand {
     @Option(help: "Only run the tests changed since this git ref, rather than every test.")
     var since: String?
 
+    @Flag(help: """
+    Only run the tests changed since the last commit, new files included. For \
+    what a branch changed, use --since <base>.
+    """)
+    var changed = false
+
     @OptionGroup var device: DeviceOptions
 
     @Option(help: """
     How many times to run the tests together. 10 by default, for the whole \
-    suite; 100 with --since, for the tests a change touched, which are few.
+    suite; 100 with --since or --changed, for the tests a change touched, \
+    which are few.
     """)
     var runs: Int?
 
@@ -43,6 +50,7 @@ struct Flaky: AsyncParsableCommand {
 
     func validate() throws {
         guard (runs ?? 1) >= 1 else { throw ValidationError("--runs has to be at least 1") }
+        guard since == nil || !changed else { throw ValidationError(Narrowing.conflict) }
         guard jitter >= 0 else { throw ValidationError("--jitter cannot be negative") }
     }
 
@@ -50,28 +58,28 @@ struct Flaky: AsyncParsableCommand {
         let startedAt = Date()
         let project = URL(fileURLWithPath: project).standardizedFileURL
 
-        // With --since, only the tests that change touched, as `litmus
-        // --since` takes only the lines it changed.
-        let base = since
+        // With --since or --changed, only the tests that change touched, as
+        // `litmus` then takes only the lines it changed.
+        let narrowing = Narrowing(since: since, changed: self.changed)
         var changed: ChangedLines?
         // The changed tests that reach something that can vary; nil runs
         // every changed test.
         var risky: [ChangedTests.Span]?
         var calm: [String] = []
-        if let base {
-            let diff = try GitDiff.changed(since: base, in: project)
+        if let narrowing {
+            let diff = try narrowing.lines(in: project)
             // Said before anything is built: no test file, nothing to rerun.
             let testFiles = diff.paths.filter { path in
                 (try? String(contentsOf: project.appendingPathComponent(path), encoding: .utf8))?
                     .contains("import Testing") == true
             }
             guard !testFiles.isEmpty else {
-                print("no Swift Testing file has changed since \(base).")
-                print("Leave out --since to run every test.")
+                print("no Swift Testing file has changed \(narrowing.since).")
+                narrowing.leaveOut(to: "run every test").forEach { print($0) }
                 return
             }
             changed = diff
-            print("  tests changed since \(base)")
+            print("  tests changed \(narrowing.since)")
 
             // Before anything is built: a test that reaches nothing that
             // can vary comes out the same every time, and rerunning it
@@ -97,7 +105,7 @@ struct Flaky: AsyncParsableCommand {
             }
             guard !found.isEmpty else {
                 print("no changed test reaches anything that can vary, so none is run again.")
-                print("Leave out --since to run every test anyway.")
+                narrowing.leaveOut(to: "run every test anyway").forEach { print($0) }
                 return
             }
             risky = found
@@ -164,9 +172,9 @@ struct Flaky: AsyncParsableCommand {
             if let note = fit.note { skipped.append((target.name, note)) }
         }
         guard !targets.isEmpty else {
-            if let base {
-                print("no Swift Testing test the build runs has changed since \(base).")
-                print("Leave out --since to run every test.")
+            if let narrowing {
+                print("no Swift Testing test the build runs has changed \(narrowing.since).")
+                narrowing.leaveOut(to: "run every test").forEach { print($0) }
                 return
             }
             throw ValidationError("no test target has Swift Testing tests; litmus flaky reruns those only")
@@ -199,7 +207,7 @@ struct Flaky: AsyncParsableCommand {
             runs: results,
             skipped: skipped,
             asked: runs,
-            scope: base.map { "changed since \($0)" },
+            scope: narrowing.map { "changed \($0.since)" },
             calm: calm,
             build: buildTook,
             duration: Date().timeIntervalSince(startedAt),

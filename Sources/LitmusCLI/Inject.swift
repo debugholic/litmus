@@ -34,9 +34,7 @@ struct Inject: AsyncParsableCommand {
             )(verbose: true).result
         } catch let nothing as NothingToMutate {
             print("\(nothing.reason).")
-            if scope.since != nil {
-                print("Leave out --since to mutate the whole tree.")
-            }
+            scope.narrowing?.leaveOut(to: "mutate the whole tree").forEach { print($0) }
             return
         }
 

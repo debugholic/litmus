@@ -35,6 +35,42 @@ public enum GitDiff {
         return parse(String(data: data, encoding: .utf8) ?? "").relative(to: prefix(of: project))
     }
 
+    /// What is not committed yet: the working tree against `HEAD`, and every
+    /// line of a Swift file git does not track yet, which `git diff` never
+    /// shows. A file written a minute ago is the one most worth checking.
+    public static func uncommitted(in project: URL) throws -> ChangedLines {
+        var lines = try changed(since: "HEAD", in: project).lines
+
+        // Run in the project, ls-files lists only what is under it, by paths
+        // from there: the keys the diff has once made relative.
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = ["ls-files", "-z", "--others", "--exclude-standard", "--", "*.swift"]
+        process.currentDirectoryURL = project
+
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+
+        try process.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0 else {
+            throw Failure(description: "git ls-files failed")
+        }
+
+        for path in String(decoding: data, as: UTF8.self).split(separator: "\0").map(String.init) {
+            guard let text = try? String(contentsOf: project.appendingPathComponent(path), encoding: .utf8) else { continue }
+            guard !text.isEmpty else { continue }
+            let count = text.split(separator: "\n", omittingEmptySubsequences: false).count
+                - (text.hasSuffix("\n") ? 1 : 0)
+            lines[path] = Set(1...count)
+        }
+
+        return ChangedLines(lines: lines)
+    }
+
     /// Where the project sits in its repository, `Packages/Player/` or empty
     /// at the root. The diff names paths from the repository's root; the
     /// copy is of the project.

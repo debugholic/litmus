@@ -122,4 +122,16 @@ struct ScopeOptions: ParsableArguments {
 
     @Option(help: "Only mutate lines changed since this git ref, rather than the whole tree.")
     var since: String?
+
+    @Flag(help: """
+    Only mutate lines changed since the last commit, new files included. For \
+    what a branch changed, use --since <base>.
+    """)
+    var changed = false
+
+    func validate() throws {
+        guard since == nil || !changed else { throw ValidationError(Narrowing.conflict) }
+    }
+
+    var narrowing: Narrowing? { Narrowing(since: since, changed: changed) }
 }
