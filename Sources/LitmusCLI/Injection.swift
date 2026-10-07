@@ -27,17 +27,17 @@ struct Injection {
     /// was one.
     func callAsFunction(verbose: Bool) async throws -> (result: ProjectInjection.Result, coverage: TimeInterval) {
         var changed: ChangedLines?
-        if let base = scope.since {
-            let diff = try GitDiff.changed(since: base, in: project)
+        if let narrowing = scope.narrowing {
+            let diff = try narrowing.lines(in: project)
 
             guard !diff.isEmpty else {
                 throw NothingToMutate(
-                    reason: "no Swift file has changed since \(base)"
+                    reason: "no Swift file has changed \(narrowing.since)"
                 )
             }
 
             changed = diff
-            print("  changes since \(base)")
+            print("  changes \(narrowing.since)")
         } else {
             print("  the whole tree")
         }

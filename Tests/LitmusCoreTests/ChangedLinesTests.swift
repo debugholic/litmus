@@ -139,6 +139,49 @@ struct ChangedLinesTests {
         #expect(changed.includes(path: "재생 설정.swift", line: 2))
     }
 
+    /// `git diff` never names a file git does not track, and a file written
+    /// a minute ago is the one most worth checking.
+    @Test("takes what is not committed yet, new files whole and ignored ones not")
+    func uncommitted() throws {
+        let repo = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("litmus-diff-\(UUID().uuidString)")
+        let project = repo.appendingPathComponent("Packages/Player")
+        try FileManager.default.createDirectory(at: project.appendingPathComponent("Sources"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        func git(_ arguments: String...) throws {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            process.arguments = ["-c", "user.name=t", "-c", "user.email=t@t"] + arguments
+            process.currentDirectoryURL = repo
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            process.waitUntilExit()
+        }
+        func write(_ text: String, _ path: String) throws {
+            try text.write(to: repo.appendingPathComponent(path), atomically: true, encoding: .utf8)
+        }
+
+        try git("init", "-q")
+        try write("Ignored.swift\n", ".gitignore")
+        try write("let a = 1\nlet b = 2\nlet c = 3\n", "Packages/Player/Sources/Old.swift")
+        try write("let x = 1\n", "App.swift")
+        try git("add", "-A")
+        try git("commit", "-q", "-m", "base")
+
+        try write("let a = 1\nlet b = 20\nlet c = 3\n", "Packages/Player/Sources/Old.swift")
+        try write("let n = 1\nlet m = n > 0\n", "Packages/Player/Sources/New.swift")
+        try write("let i = 1\n", "Packages/Player/Sources/Ignored.swift")
+        try write("let y = 2\n", "Outside.swift")
+
+        let changed = try GitDiff.uncommitted(in: project)
+
+        #expect(changed.lines(of: "Sources/Old.swift") == [2])
+        #expect(changed.lines(of: "Sources/New.swift") == [1, 2])
+        #expect(changed.lines(of: "Sources/Ignored.swift").isEmpty)
+        #expect(changed.fileCount == 2)
+    }
+
     /// Matching by shared ending needs two components to agree, and a file
     /// at the project's root has one.
     @Test("matches a file at the project's root by its path under the copy")
