@@ -11,17 +11,14 @@ struct Flaky: AsyncParsableCommand {
     @Option(help: "Project to test. It is never modified.")
     var project: String = "."
 
-    @Option(help: "Only run the tests changed since this git ref.")
+    @Option(help: "Only run the tests changed since this git ref, rather than every test.")
     var since: String?
-
-    @Flag(help: "Run every test, not only the ones this branch changed.")
-    var all = false
 
     @OptionGroup var device: DeviceOptions
 
     @Option(help: """
-    How many times to run the tests together. 100 by default for the tests a \
-    change touched, which are few; 10 with --all, which runs the whole suite.
+    How many times to run the tests together. 10 by default, for the whole \
+    suite; 100 with --since, for the tests a change touched, which are few.
     """)
     var runs: Int?
 
@@ -46,7 +43,6 @@ struct Flaky: AsyncParsableCommand {
 
     func validate() throws {
         guard (runs ?? 1) >= 1 else { throw ValidationError("--runs has to be at least 1") }
-        guard since == nil || !all else { throw ValidationError("pass --since or --all, not both") }
         guard jitter >= 0 else { throw ValidationError("--jitter cannot be negative") }
     }
 
@@ -54,10 +50,9 @@ struct Flaky: AsyncParsableCommand {
         let startedAt = Date()
         let project = URL(fileURLWithPath: project).standardizedFileURL
 
-        // The tests this branch changed, as `litmus` takes the lines it
-        // changed. The existing suite already runs once in the pipeline;
-        // repeating it here would be paying for that again.
-        let base = all ? nil : (since ?? Discovery.defaultBase(in: project))
+        // With --since, only the tests that change touched, as `litmus
+        // --since` takes only the lines it changed.
+        let base = since
         var changed: ChangedLines?
         // The changed tests that reach something that can vary; nil runs
         // every changed test.
@@ -72,7 +67,7 @@ struct Flaky: AsyncParsableCommand {
             }
             guard !testFiles.isEmpty else {
                 print("no Swift Testing file has changed since \(base).")
-                print("Pass --all to run every test.")
+                print("Leave out --since to run every test.")
                 return
             }
             changed = diff
@@ -102,7 +97,7 @@ struct Flaky: AsyncParsableCommand {
             }
             guard !found.isEmpty else {
                 print("no changed test reaches anything that can vary, so none is run again.")
-                print("Pass --all to run every test anyway.")
+                print("Leave out --since to run every test anyway.")
                 return
             }
             risky = found
@@ -171,7 +166,7 @@ struct Flaky: AsyncParsableCommand {
         guard !targets.isEmpty else {
             if let base {
                 print("no Swift Testing test the build runs has changed since \(base).")
-                print("Pass --all to run every test.")
+                print("Leave out --since to run every test.")
                 return
             }
             throw ValidationError("no test target has Swift Testing tests; litmus flaky reruns those only")

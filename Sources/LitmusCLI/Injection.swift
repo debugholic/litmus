@@ -27,7 +27,7 @@ struct Injection {
     /// was one.
     func callAsFunction(verbose: Bool) async throws -> (result: ProjectInjection.Result, coverage: TimeInterval) {
         var changed: ChangedLines?
-        if let base = scope.base(for: project) {
+        if let base = scope.since {
             let diff = try GitDiff.changed(since: base, in: project)
 
             guard !diff.isEmpty else {

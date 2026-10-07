@@ -133,36 +133,6 @@ enum Discovery {
         return chosen
     }
 
-    // MARK: - git
-
-    /// The branch this one is measured against.
-    ///
-    /// `origin/HEAD` is what the remote calls its default branch, which is the
-    /// same thing a review diffs against. Absent — no remote, a shallow clone —
-    /// there is no sensible base and the whole tree is the honest scope.
-    static func defaultBase(in project: URL) -> String? {
-        guard
-            let head = try? run(
-                "/usr/bin/git",
-                ["symbolic-ref", "refs/remotes/origin/HEAD"],
-                in: project
-            ).trimmingCharacters(in: .whitespacesAndNewlines),
-            head.hasPrefix("refs/remotes/")
-        else { return nil }
-
-        let base = String(head.dropFirst("refs/remotes/".count))
-
-        // On the default branch itself there is nothing to compare against,
-        // and an empty diff would report a suite as perfect on zero mutants.
-        guard
-            let current = try? run("/usr/bin/git", ["rev-parse", "--abbrev-ref", "HEAD"], in: project)
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-            !base.hasSuffix("/\(current)")
-        else { return nil }
-
-        return base
-    }
-
     // MARK: -
 
     private static func run(_ executable: String, _ arguments: [String], in directory: URL) throws -> String {
