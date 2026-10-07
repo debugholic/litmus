@@ -52,10 +52,12 @@ $ litmus
 ```
 
 In a project directory, that is the whole command. Litmus works out the rest:
-whether the tests need a simulator, which tests there are, which simulator to
-use, and what this branch changed.
+whether the tests need a simulator, which tests there are, and which simulator
+to use. It mutates the whole tree; `--since <ref>` keeps only the lines changed
+since that ref, which is what fits inside a review:
 
 ```
+$ litmus --since origin/develop
 changes since origin/develop
   every unit test in the project, through a scheme of litmus's own
 measuring coverage…
@@ -131,16 +133,7 @@ measures the tests against the code they run, not the project.
 
 ### What it mutates, by default
 
-Two filters are on unless you turn them off, because a run that takes hours is
-a run nobody does.
-
-**What this branch changed.** The whole tree is the right scope for a nightly
-job; for a review it is thousands of mutants on code nobody touched, and their
-verdicts were settled on the last run. The base is `origin/HEAD` — what a
-review diffs against — and the diff is taken line by line, against the merge
-base, and reaches the working tree so uncommitted work counts. On the default
-branch, or outside a repository with a remote, there is nothing to compare
-against and the whole tree is the honest scope.
+The whole tree, less the mutants its tests could never catch.
 
 **What the tests are aimed at.** Each test target names the modules it tests
 — by name, `CheckoutTests` for `Checkout`, and by `@testable
@@ -156,9 +149,16 @@ will survive whatever the code says, and the only thing running it buys is the
 minute it took. Litmus runs the suite once with coverage on and filters before
 writing, so a skipped mutant costs neither a run nor the file growth.
 
+**What a change touched, with `--since`.** The whole tree is the right scope
+for a nightly job; for a review it is thousands of mutants on code nobody
+touched, and their verdicts were settled on the last run. `--since
+origin/develop` keeps the lines changed since that ref, taken line by line
+against the merge base, and reaches the working tree so uncommitted work
+counts.
+
 ```
-litmus --all           # the whole tree
-litmus --since main    # a different base
+litmus                 # the whole tree
+litmus --since main    # only what changed since main
 litmus --only Checkout # only paths containing this
 ```
 
@@ -166,9 +166,9 @@ On one iOS project — 1,492 mutants across 105 files:
 
 | | mutants | on one simulator |
 |---|---|---|
-| `--all`, nothing filtered | 1,492 | a day |
-| `--all` | 203 | hours |
-| the default | 16 | minutes |
+| nothing filtered | 1,492 | a day |
+| the default | 203 | hours |
+| `--since`, on one branch | 16 | minutes |
 
 The last row is a run that fits inside a pull request. Litmus says what it left
 out before it starts, because a narrow run that scores well is not a clean bill
@@ -212,19 +212,19 @@ build for this machine whatever else is true of it.
 `litmus flaky` reruns the tests and names the ones whose result changes.
 
 ```
-litmus flaky          # the tests this branch changed
-litmus flaky --all    # every test
+litmus flaky               # every test
+litmus flaky --since main  # only the tests changed since main
 ```
 
-Before building, it follows what each changed test calls through the
-project's sources, and keeps the tests that reach something that can vary:
-a task, a timer, the clock, chance, `UserDefaults`, a shared instance. When
-none does, it stops there, without a build. The rest run on one simulator,
-in one process:
+With `--since`, before building, it follows what each changed test calls
+through the project's sources, and keeps the tests that reach something that
+can vary: a task, a timer, the clock, chance, `UserDefaults`, a shared
+instance. When none does, it stops there, without a build. The rest run on one
+simulator, in one process:
 
 1. each alone, last first, before anything else — one that needs another
    test to run first fails here
-2. together, 100 times (10 with `--all`) — one that fails at random
+2. together, 10 times (100 with `--since`) — one that fails at random
 3. each alone again — one that depends on state the others left behind
 
 ```

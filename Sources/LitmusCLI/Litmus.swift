@@ -66,7 +66,9 @@ struct Run: AsyncParsableCommand {
             // command was typed wrong, and exiting non-zero would turn a
             // documentation-only branch into a red pipeline.
             print("\(nothing.reason).")
-            print("Pass --all to mutate the whole tree.")
+            if scope.since != nil {
+                print("Leave out --since to mutate the whole tree.")
+            }
             return
         }
 

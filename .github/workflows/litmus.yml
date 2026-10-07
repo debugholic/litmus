@@ -35,15 +35,13 @@ jobs:
       - name: Build
         run: swift build -c release
 
-      # --all rather than relying on main having nothing to compare against:
-      # the badge is for the whole tree, and should not narrow if that changes.
       - name: Run Litmus on itself
         run: |
           set -o pipefail
           BIN=$(swift build -c release --show-bin-path)/litmus
           ONLY=()
           if [ -n "${{ inputs.only }}" ]; then ONLY=(--only "${{ inputs.only }}"); fi
-          "$BIN" --all "${ONLY[@]}" --format json --output litmus.json 2>&1 | tee litmus.log
+          "$BIN" "${ONLY[@]}" --format json --output litmus.json 2>&1 | tee litmus.log
 
       # Litmus says the suite could not run, not why. The baseline is one
       # `swift test --skip-build` in its working copy, so run that again where

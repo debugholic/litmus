@@ -120,21 +120,6 @@ struct ScopeOptions: ParsableArguments {
     @Option(help: "Only mutate files whose path contains this text.")
     var only: String?
 
-    @Option(help: "Only mutate lines changed since this git ref.")
+    @Option(help: "Only mutate lines changed since this git ref, rather than the whole tree.")
     var since: String?
-
-    @Flag(help: "Mutate the whole tree, not only what this branch changed.")
-    var all = false
-
-    /// The ref to diff against, or nil to take the whole tree.
-    ///
-    /// Defaulting to the branch's own base is what makes a plain `litmus` fit
-    /// inside a review. On the default branch, or outside a repository with a
-    /// remote, there is nothing to compare against and the whole tree is the
-    /// honest scope.
-    func base(for project: URL) -> String? {
-        if all { return nil }
-        if let since { return since }
-        return Discovery.defaultBase(in: project)
-    }
 }
