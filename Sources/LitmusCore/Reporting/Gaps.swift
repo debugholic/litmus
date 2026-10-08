@@ -104,8 +104,8 @@ public struct FunctionGap: Sendable {
 /// A mutant no test reaches and one a test runs through without noticing
 /// are different news. Listed together, one project's report named 702
 /// functions over 3,700 lines, and the dozen whose tests run but check
-/// nothing were somewhere in the middle. Those come first, in full; code no
-/// test reaches is counted by file.
+/// nothing were somewhere in the middle. Only those are listed; code no test
+/// reaches is counted in one line.
 public struct TestPlan: Sendable {
     /// A function a test runs through where a change went unnoticed.
     public struct Entry: Sendable {
@@ -113,14 +113,10 @@ public struct TestPlan: Sendable {
         public let gap: FunctionGap
         /// The tests that ran through them, each once, in the order met.
         public let passedBy: [TestRef]
-        /// Its other mutants, the ones no test reaches.
-        public let unreached: Int
     }
 
     /// Untested ones first.
     public let unchecked: [Entry]
-    /// Mutants no test reaches, by file, most first.
-    public let unreached: [(path: String, count: Int)]
 
     public init(_ results: [MutantResult]) {
         unchecked = FunctionGap.find(in: results).compactMap { gap in
@@ -139,17 +135,10 @@ public struct TestPlan: Sendable {
                     scored: gap.caught + survived.count,
                     survivors: survived
                 ),
-                passedBy: passedBy,
-                unreached: gap.survivors.count - survived.count
+                passedBy: passedBy
             )
         }
-
-        unreached = Dictionary(grouping: results.filter { $0.verdict == .noCoverage }, by: \.mutant.filePath)
-            .map { (path: $0.key, count: $0.value.count) }
-            .sorted { ($0.count, $1.path) > ($1.count, $0.path) }
     }
-
-    public var unreachedTotal: Int { unreached.reduce(0) { $0 + $1.count } }
 
     /// The functions of one type, and the tests that ran through any of them.
     public struct Group: Sendable {

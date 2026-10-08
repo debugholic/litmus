@@ -129,8 +129,12 @@ on the line the compiler named, writes that file again from the original, and
 builds the rest.
 
 Mutants filtered out before the run — outside the change, unreached by any
-test, or in code the tests are not aimed at — are not in the score at all. It
-measures the tests against the code they run, not the project.
+test, or in code the tests are not aimed at — are not in the score at all, and
+neither is one the run finds no test reaches. Those are counted in one line,
+`120 mutant(s) in 4 file(s) no test reaches, left out of the score`, and not
+listed: a view no unit test hosts is not a test someone forgot, and listed by
+file they buried the ones that were. The score measures the tests against the
+code they run, not the project.
 
 ### What it mutates, by default
 

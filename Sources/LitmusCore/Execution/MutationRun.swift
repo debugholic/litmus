@@ -110,9 +110,17 @@ public struct MutationRun: Sendable {
         /// of what the tests reach they catch.
         public var testStrength: Double? { score }
 
-        /// Caught over every mutant that ran, reached or not: how much of the
-        /// code the tests guard. Mutants that did not build or could not run
-        /// are left out, as they are from `score`.
+        /// The files of the mutants no test reaches. The reports count these
+        /// in one line rather than list them: a view no unit test hosts is
+        /// not a test someone forgot, and listed it buried the ones that were.
+        public var unreachedFiles: Int {
+            Set(results.filter { $0.verdict == .noCoverage }.map(\.mutant.filePath)).count
+        }
+
+        /// Caught over every mutant that ran, reached or not. Kept in the JSON
+        /// for whoever tracks it; no report shows it, since code no test
+        /// reaches is left out of the score. Mutants that did not build or
+        /// could not run are left out, as they are from `score`.
         public var mutationScore: Double? {
             let caught = results.count { $0.verdict == .killed || $0.verdict == .timedOut }
             let total = caught + survived + noCoverage
