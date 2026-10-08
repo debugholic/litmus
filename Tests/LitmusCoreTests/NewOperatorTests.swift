@@ -81,6 +81,51 @@ struct NewOperatorTests {
         #expect(result.mutants.isEmpty)
     }
 
+    /// A `#if` condition is read by the compiler, which takes no call there:
+    /// `os(iOS) || os(tvOS)` rewritten into a switch did not build.
+    @Test("leaves the operators in a #if condition alone")
+    func compileConditions() {
+        let source = """
+        #if os(iOS) || os(tvOS)
+        let a = 1
+        #elseif DEBUG && !TESTING
+        let b = 2
+        #endif
+        """
+        let result = inject(source, ["ChangeLogicalConnector", "RelationalOperatorReplacement", "ChangeArithmeticOperator"])
+
+        #expect(result.mutants.isEmpty)
+        #expect(result.source.contains("#if os(iOS) || os(tvOS)"))
+        #expect(result.source.contains("#elseif DEBUG && !TESTING"))
+    }
+
+    /// Only the condition is the compiler's. What a `#if` keeps runs like any
+    /// other code, in a type or in a function.
+    @Test("mutates the code a #if keeps")
+    func compileConditionBodies() {
+        let result = inject("""
+        struct S {
+            #if DEBUG
+            static let verbose = true
+            #endif
+            func f(_ a: Bool, _ b: Bool) -> Bool {
+                #if DEBUG
+                let x = false
+                return a || x
+                #else
+                return a && b
+                #endif
+            }
+        }
+        """, ["FlipBooleanLiteral", "ChangeLogicalConnector"])
+
+        #expect(Set(result.mutants.map(\.description)) == [
+            "changed true to false", "changed false to true", "changed || to &&", "changed && to ||",
+        ])
+        #expect(result.source.contains("#if DEBUG"))
+        #expect(isValidSwift(result.source))
+    }
+
     // MARK: - conditions
 
     @Test("negates the condition of if, guard and while")
