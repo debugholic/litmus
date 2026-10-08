@@ -23,14 +23,17 @@ question: it changes your code on purpose and checks whether your tests fail.
 ```
 $ litmus
 
-  ✔ killed   TestSuiteOutcome.swift:14  swapped the branches of a ternary
-  ✘ survived CartViewModel.swift:479  removed a call whose result is unused
+  ✔ killed   [1/2] TestSuiteOutcome.swift:14  swapped the branches of a ternary  0.4s
+  ✘ survived [2/2] CartViewModel.swift:479  removed the call to track(_:)  0.3s
 
-Litmus score 50%
+Litmus score 50% — caught of the mutants the tests reach
 killed 1 / survived 1 / error 0
 
-survived — nothing failed when this changed:
-  CartViewModel.swift:479  removed a call whose result is unused
+what to test — 1 untested, 0 partly tested:
+
+CartViewModel — passed by: placesTheOrder()
+  UNTESTED placeOrder()  0 of 1 caught
+    CartViewModel.swift:479  side-effect  removed the call to track(_:)
 ```
 
 A surviving mutant is a hole. Something in your code can be wrong and every
@@ -59,18 +62,19 @@ is not committed yet:
 
 ```
 $ litmus --since origin/develop
-changes since origin/develop
+  changes since origin/develop
   every unit test in the project, through a scheme of litmus's own
-measuring coverage…
+  measuring coverage — building and running the suite once…
 
 16 mutants across 2 file(s), skipping 1391 outside the change and 85 unreachable
-  checking the baseline first…
+  baseline passed in 1m 2s
 
-  ✔ killed   CartViewModel+Coupon.swift:26  removed a call whose result is unused
-  ✘ survived CartViewModel.swift:479  removed a call whose result is unused
+  ✔ killed   [1/16] CartViewModel+Coupon.swift:26  removed the call to apply(_:)  0.5s
+  ✘ survived [2/16] CartViewModel.swift:479  removed the call to track(_:)  0.3s
+  …
 
-Litmus score 50%
-killed 1 / survived 1 / error 0
+Litmus score 88% — caught of the mutants the tests reach
+killed 14 / survived 2 / error 0
 ```
 
 Where a guess would be wrong, pass it: `--scheme <name>`, `--destination`.
@@ -91,16 +95,18 @@ sixty-nine. Litmus says which it left out.
 
 `--scheme <name>` runs only that scheme's tests instead.
 
-`--workers N` runs N mutants at once, each on its own simulator. It defaults to
-one: a simulator is not cheap, and past a point they contend for the machine
-rather than share it.
+`--workers N` runs N mutants at once, each on its own simulator, or for a Swift
+package, each in a copy of its own. It defaults to one: a simulator is not
+cheap, and past a point they contend for the machine rather than share it.
 
 `--format plain|json|html|xcode` and `--output <path>` control the report;
-`xcode` emits `warning:` lines Xcode shows beside the mutated line. With more
-than one file, the plain report scores each, weakest first:
+`xcode` emits `warning:` lines Xcode shows beside the mutated line. Whatever the
+format, the run also keeps the report as a page in its working copy and prints
+its address. With more than one file, the plain report scores each, weakest
+first:
 
 ```
-Litmus score 80%
+Litmus score 80% — caught of the mutants the tests reach
 killed 3 / survived 1 / timeout 1 / unviable 1 / error 0
 
 by file, weakest first:
@@ -153,7 +159,10 @@ is what the tests mean.
 **What no test reaches.** A mutant on a line no test runs cannot be killed. It
 will survive whatever the code says, and the only thing running it buys is the
 minute it took. Litmus runs the suite once with coverage on and filters before
-writing, so a skipped mutant costs neither a run nor the file growth.
+writing, so a skipped mutant costs neither a run nor the file growth. On a
+simulator, when every test is Swift Testing, that run is skipped: each test is
+run alone in the mutation run itself to see which mutants it reaches, and a
+mutant none reaches is compiled in but never run.
 
 **What a tool wrote.** Generated code is fixed by running its generator, not by
 a test, so a mutant that survives in it says nothing anyone can act on. A file
@@ -181,15 +190,16 @@ litmus --only Checkout # only paths containing this
 
 On one iOS project — 1,492 mutants across 105 files:
 
-| | mutants | on one simulator |
+| | mutants | one launch per mutant, on one simulator |
 |---|---|---|
 | nothing filtered | 1,492 | a day |
 | the default | 203 | hours |
 | `--since`, on one branch | 16 | minutes |
 
-The last row is a run that fits inside a pull request. Litmus says what it left
-out before it starts, because a narrow run that scores well is not a clean bill
-of health for the project.
+Those times are one launch per mutant; running many mutants in one process,
+below, takes most of them away. The last row is a run that fits inside a pull
+request. Litmus says what it left out before it starts, because a narrow run
+that scores well is not a clean bill of health for the project.
 
 Coverage is measured on the project as written: injecting moves every line
 below the first mutant, and a plan's positions are positions in the original.
@@ -218,7 +228,7 @@ that never reaches for UIKit does not need a simulator, and the simulator is
 what a mutation run actually costs — on one project, narrowing the suite with
 `-only-testing` cut test time from 24.6s to 0.236s without moving the wall
 clock at all. The minute per mutant was the round trip, not the tests. Litmus
-run against itself this way costs about 6 seconds per mutant.
+runs against itself this way.
 
 Litmus picks between them by looking for an `.xcodeproj` or `.xcworkspace`, and
 failing that, for an `import UIKit`: a project that reaches for UIKit cannot
@@ -226,7 +236,8 @@ build for this machine whatever else is true of it.
 
 ## Flaky tests
 
-`litmus flaky` reruns the tests and names the ones whose result changes.
+`litmus flaky` reruns the tests and names the ones whose result changes. It
+runs Xcode projects for now; a package that runs with `swift test` is refused.
 
 ```
 litmus flaky               # every test
@@ -237,8 +248,8 @@ litmus flaky --changed     # only the tests not committed yet
 With `--since` or `--changed`, before building, it follows what each changed
 test calls through the project's sources, and keeps the tests that reach
 something that can vary: a task, a timer, the clock, chance, `UserDefaults`, a
-shared instance. When none does, it stops there, without a build. The rest run
-on one simulator, in one process:
+shared instance. When none does, it stops there, without a build. The tests it
+keeps run on one simulator, in one process:
 
 1. each alone, last first, before anything else — one that needs another
    test to run first fails here
@@ -306,14 +317,21 @@ The switch goes where the change happens rather than around the block holding
 it:
 
 ```swift
-let canCheckout = (__litmus_Cart_ChangeLogicalConnector_24_49_832
-    ? (!cart.isEmpty || user.isSignedIn)
-    : (!cart.isEmpty && user.isSignedIn))
+let canCheckout = (__litmus_and(__litmus_Cart_ChangeLogicalConnector_4_37_165,
+    !cart.isEmpty, user.isSignedIn))
 
-private var __litmus_Cart_ChangeLogicalConnector_24_49_832: Bool {
-    __litmus_on("Cart_ChangeLogicalConnector_24_49_832")
+private func __litmus_and(_ on: Bool, _ a: Bool, _ b: @autoclosure () throws -> Bool) rethrows -> Bool {
+    on ? try (a || b()) : try (a && b())
+}
+
+private var __litmus_Cart_ChangeLogicalConnector_4_37_165: Bool {
+    __litmus_on("Cart_ChangeLogicalConnector_4_37_165")
 }
 ```
+
+An operator becomes a call to a helper that takes the switch and both sides,
+so each side is written once and the right one is still evaluated only when
+it was before.
 
 `__litmus_on` compares the id with `LITMUS_ACTIVE`, read with `getenv` every
 time the flag is evaluated, so the active mutant can change inside a running
@@ -340,9 +358,10 @@ On a simulator, launching is most of what a mutant costs: installing the app
 and starting the runner took 85 of every 115 seconds. So for each test target
 whose tests are all Swift Testing, Litmus adds a small driver to the working
 copy's tests. It is launched once per target, and switches from one mutant to
-the next, running that target's tests again each time. On one project 34 mutants took 99
-seconds this way against 65 minutes one launch at a time, and every verdict
-checked against a fresh process agreed.
+the next, running the tests that reach each mutant again each time. On one
+project 34 mutants took 99 seconds this way against 65 minutes one launch at a
+time, and every verdict checked against a fresh process agreed. A Swift
+package's tests run the same way, through `swift test`.
 
 A mutant that crashes takes the process with it; Litmus records it as killed
 and launches again from the next one. One that hangs is stopped and recorded
@@ -351,11 +370,11 @@ as a timeout.
 Two kinds of mutant still get a process of their own:
 
 - **XCTest cases.** The driver cannot rerun them, so a target that has any
-  runs each of its mutants in a fresh process, narrowed to that target with
-  `-only-testing`.
+  runs each of its mutants in a fresh process, narrowed to that target.
 - **Values Swift computes once.** A global's or a static property's initial
   value is kept from the first time it is read, with whichever mutant was on
-  then. Those mutants run after the batch, one launch each.
+  then. Those mutants run after the batch, one launch each — except one no
+  test reads, which needs no launch to survive.
 
 ## Operators
 
@@ -368,11 +387,15 @@ Two kinds of mutant still get a process of their own:
 | `FlipBooleanLiteral` | `true` ↔ `false` |
 | `NegateCondition` | `if x` → `if !x`, and the same for `guard` and `while` |
 | `RemoveSideEffects` | drops a call whose result is unused |
+| `ReplaceReturnValue` | `return x` → the declared type's empty value: `false`, `0`, `""`, `[]`, `[:]`, `nil` |
 
-`ChangeArithmeticOperator` leaves `+` alone beside a string, array or
-dictionary literal, where it joins rather than adds. `FlipBooleanLiteral`
-leaves alone literals the compiler reads: `#if`, attributes, raw values,
-default arguments and patterns.
+No operator touches a `#if` condition, which the compiler reads; the code a
+`#if` keeps is mutated like any other. `ChangeArithmeticOperator` leaves `+`
+alone beside a string, array or dictionary literal, where it joins rather than
+adds. `FlipBooleanLiteral` leaves alone the other literals the compiler reads:
+attributes, raw values, default arguments and patterns. `ReplaceReturnValue`
+leaves alone a return whose type it cannot read, as in a closure, and one that
+already returns the empty value.
 
 `RemoveSideEffects` leaves alone anything that would stop the file compiling:
 an initializer's `super.init`, a call that never returns, and a block whose
@@ -386,10 +409,7 @@ project with several schemes, in one process and one per mutant.
 
 Litmus is run against itself.
 
-Not there yet: line-level coverage on the `xcode` harness, and more than one
-worker on the `swiftpm` harness. Two `swift test` processes in one package
-directory contend over `.build` and report verdicts that disagree with a
-sequential run, so that is refused rather than warned about.
+Not there yet: line-level coverage on the `xcode` harness.
 
 ## License
 
