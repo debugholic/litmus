@@ -181,8 +181,8 @@ struct StrykerReportTests {
     func frontLinksDropSharedFolder() {
         let copy = URL(fileURLWithPath: "/tmp/copy")
         let html = front([
-            result(.noCoverage, at: "/tmp/copy/Sources/Shared/UI/KernButton.swift"),
-            result(.noCoverage, at: "/tmp/copy/Sources/Feature/A.swift"),
+            result(.survived, at: "/tmp/copy/Sources/Shared/UI/KernButton.swift"),
+            result(.survived, at: "/tmp/copy/Sources/Feature/A.swift"),
         ], copy: copy)
 
         #expect(html.contains("href=\"#mutant/Shared/UI/KernButton.swift\""))
@@ -195,7 +195,8 @@ struct StrykerReportTests {
         let html = front([result(.noCoverage, at: "/tmp/copy/A.swift")], copy: copy)
 
         #expect(!html.contains("class=\"bar\""))
-        #expect(html.contains("No test reaches"))
+        #expect(html.contains("1 mutant(s) in 1 file(s) no test reaches, left out of the score"))
+        #expect(!html.contains("Mutation score"))
     }
 
     @Test("links to the file in the viewer, with the path encoded and names escaped")

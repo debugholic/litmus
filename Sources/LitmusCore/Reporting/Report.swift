@@ -83,12 +83,8 @@ public struct Report: Sendable {
         } else {
             lines.append("Litmus score —")
         }
-        // A high score over a sliver of the code reads as a safe suite. The
-        // share of all mutants caught says how much of the code is guarded.
-        if let whole = summary.mutationScore, summary.noCoverage > 0 {
-            lines.append("mutation score \(percent(whole)) — caught of every mutant, reached or not")
-        }
         lines.append(counts(summary.results))
+        if let unreached = Self.unreached(summary) { lines.append(unreached) }
         // Beside the score, because it is about the score.
         lines += failedAlone()
 
@@ -109,7 +105,7 @@ public struct Report: Sendable {
         }
 
         // Only files with a score: a file the tests never reach says nothing
-        // here, and one project listed 112 of them. They are counted below.
+        // here, and one project listed 112 of them. They are counted above.
         let files = summary.files
         let scored = files.filter { $0.score != nil }
         if files.count > 1, !scored.isEmpty {
@@ -121,16 +117,12 @@ public struct Report: Sendable {
                 let padded = file.path.padding(toLength: width, withPad: " ", startingAt: 0)
                 lines.append("  \(String(repeating: " ", count: max(0, 4 - score.count)))\(score)  \(padded)  \(counts(file.results))")
             }
-            if files.count > scored.count {
-                lines.append("  and \(files.count - scored.count) file(s) with nothing the tests reach")
-            }
         }
 
         lines += slowest()
 
         let plan = TestPlan(summary.results)
         lines += unchecked(plan)
-        lines += unreached(plan)
 
         // Last: what the numbers above were measured on.
         if let run { lines += ["", "run \(run.line)"] }
@@ -179,35 +171,18 @@ public struct Report: Sendable {
                     let kind = survivor.gapKind.rawValue.padding(toLength: kindWidth, withPad: " ", startingAt: 0)
                     lines.append("    \(location(of: survivor))  \(kind)  \(Self.what(survivor.mutant))")
                 }
-                if entry.unreached > 0 {
-                    lines.append("    and \(entry.unreached) more in it no test reaches")
-                }
             }
         }
         return lines
     }
 
-    /// Code no test runs, counted by file: listed mutant by mutant it was
-    /// thousands of lines that all said the same thing.
-    private func unreached(_ plan: TestPlan) -> [String] {
-        guard !plan.unreached.isEmpty else { return [] }
-
-        let root = MutationRun.Summary.commonDirectory(of: summary.results.map(\.mutant.filePath))
-        let shown = plan.unreached.prefix(10)
-        let width = String(shown.first?.count ?? 0).count
-
-        var lines = [
-            "",
-            "no test reaches — \(plan.unreachedTotal) mutant(s) in \(plan.unreached.count) file(s), most first:",
-        ]
-        for file in shown {
-            let path = root.isEmpty ? file.path : String(file.path.dropFirst(root.count))
-            lines.append("  \(String(repeating: " ", count: max(0, width - String(file.count).count)))\(file.count)  \(path)")
-        }
-        if plan.unreached.count > shown.count {
-            lines.append("  and \(plan.unreached.count - shown.count) more file(s)")
-        }
-        return lines
+    /// Code no test runs, in one line and out of the score. Listed by file it
+    /// led with the views no unit test hosts, and told someone to call them
+    /// from a test; the score already says how well what the tests reach is
+    /// checked. Nil when the tests reach everything.
+    static func unreached(_ summary: MutationRun.Summary) -> String? {
+        guard summary.noCoverage > 0 else { return nil }
+        return "\(summary.noCoverage) mutant(s) in \(summary.unreachedFiles) file(s) no test reaches, left out of the score"
     }
 
     /// The five tests that cost the run most, when the probe timed them.
@@ -369,7 +344,6 @@ public struct Report: Sendable {
         var parts = ["killed \(count(.killed))", "survived \(count(.survived))"]
         if count(.timedOut) > 0 { parts.append("timeout \(count(.timedOut))") }
         if count(.unviable) > 0 { parts.append("unviable \(count(.unviable))") }
-        if count(.noCoverage) > 0 { parts.append("no coverage \(count(.noCoverage))") }
         parts.append("error \(count(.error))")
         return parts.joined(separator: " / ")
     }

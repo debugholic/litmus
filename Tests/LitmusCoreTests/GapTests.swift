@@ -137,16 +137,22 @@ struct GapTests {
         #expect(rendered.contains("   6.0s  3.0s × 2  느린 테스트"))
     }
 
-    @Test("plain report adds the mutation score when some mutants no test reaches")
-    func plainMutationScore() {
+    /// A view no unit test hosts is not a test someone forgot: counted, it
+    /// stays out of the score and out of the way.
+    @Test("plain report counts code no test reaches in one line, out of the score")
+    func plainUnreachedLine() {
         let reached = Report(MutationRun.Summary(results: [result(1, .killed, in: "f()")], duration: 1))
         let partly = Report(MutationRun.Summary(results: [
             result(1, .killed, in: "f()"), result(2, .noCoverage, in: "g()"),
-            result(3, .noCoverage, in: "g()"), result(4, .noCoverage, in: "g()"),
+            result(3, .noCoverage, in: "g()"), result(4, .noCoverage, in: "h()", file: "/p/B.swift"),
         ], duration: 1))
+        let rendered = try! partly.rendered(as: .plain)
 
-        #expect(!(try! reached.rendered(as: .plain)).contains("mutation score"))
-        #expect((try! partly.rendered(as: .plain)).contains("mutation score 25% — caught of every mutant, reached or not"))
+        #expect(!(try! reached.rendered(as: .plain)).contains("no test reaches"))
+        #expect(rendered.contains("Litmus score 100%"))
+        #expect(rendered.contains("3 mutant(s) in 2 file(s) no test reaches, left out of the score"))
+        #expect(!rendered.contains("mutation score"))
+        #expect(!rendered.contains("no coverage"))
     }
 
     // MARK: - what to test
@@ -165,10 +171,6 @@ struct GapTests {
 
         #expect(plan.unchecked.map(\.gap.name) == ["A.checked()"])
         #expect(plan.unchecked.first?.gap.survivors.map(\.mutant.line) == [1])
-        #expect(plan.unchecked.first?.unreached == 1)
-        #expect(plan.unreached.map(\.path) == ["/p/A.swift", "/p/B.swift"] || plan.unreached.map(\.path) == ["/p/B.swift", "/p/A.swift"])
-        #expect(plan.unreached.map(\.count) == [2, 2])
-        #expect(plan.unreachedTotal == 4)
     }
 
     @Test("keeps two functions of one name in different files apart")
@@ -180,10 +182,10 @@ struct GapTests {
             result(1, .survived, in: "format(_:)", file: "/p/B.swift"),
         ])
 
-        #expect(plan.unchecked.map(\.unreached).sorted() == [0, 2])
+        #expect(Set(plan.unchecked.map(\.gap.filePath)) == ["/p/A.swift", "/p/B.swift"])
     }
 
-    @Test("plain report counts code no test reaches by file, and leaves it out of what to test")
+    @Test("plain report leaves code no test reaches out of what to test")
     func plainUnreached() {
         let rendered = try! Report(MutationRun.Summary(results: [
             result(1, .survived, in: "A.checked()"),
@@ -194,8 +196,8 @@ struct GapTests {
 
         #expect(rendered.contains("what to test — 1 untested, 0 partly tested:"))
         #expect(!rendered.contains("A.unreached()"))
-        #expect(rendered.contains("no test reaches — 3 mutant(s) in 2 file(s), most first:"))
-        #expect(rendered.contains("  2  B.swift"))
+        #expect(!rendered.contains("B.swift"))
+        #expect(!rendered.contains("more in it no test reaches"))
     }
 
     /// A view model's properties each came with the same tests named under
@@ -219,7 +221,7 @@ struct GapTests {
         #expect(TestPlan.split("Int+Extension") == ("Int+Extension", nil))
     }
 
-    @Test("lists only files with a score in the file table, and counts the rest")
+    @Test("lists only files with a score in the file table, and counts the rest above")
     func plainFileTable() {
         let rendered = try! Report(MutationRun.Summary(results: [
             result(1, .killed, in: "f()"),
@@ -228,7 +230,7 @@ struct GapTests {
         ], duration: 1)).rendered(as: .plain)
 
         #expect(rendered.contains("by file, weakest first:"))
-        #expect(!rendered.contains("—  C.swift"))
-        #expect(rendered.contains("and 1 file(s) with nothing the tests reach"))
+        #expect(!rendered.contains("C.swift"))
+        #expect(rendered.contains("1 mutant(s) in 1 file(s) no test reaches, left out of the score"))
     }
 }

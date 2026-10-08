@@ -74,7 +74,7 @@ public struct StrykerReport: Sendable {
 
     // MARK: - what to read first
 
-    /// Above the viewer: the two scores, what to test, and what makes the run
+    /// Above the viewer: the score, what to test, and what makes the run
     /// slow. The viewer is a file tree; it does not say where to start, and
     /// its bar of counts runs its numbers together when one kind is most of
     /// the run.
@@ -82,7 +82,6 @@ public struct StrykerReport: Sendable {
         let plan = TestPlan(summary.results)
         let caught = summary.killed + summary.timedOut
         let reached = caught + summary.survived
-        let total = caught + summary.survived + summary.noCoverage
         var parts: [String] = []
 
         parts.append("""
@@ -90,7 +89,7 @@ public struct StrykerReport: Sendable {
         <a class="button" href="#mutant">Show details →</a>\(flaky?.button("Flaky →") ?? "")</div></div>
         """)
 
-        // The two scores, in cards coloured by the report's own thresholds.
+        // The score, in a card coloured by the report's own thresholds.
         func card(_ value: Double?, _ label: String, _ hint: String) -> String {
             let text = value.map { "\(Int($0.rounded()))%" } ?? "—"
             return """
@@ -101,7 +100,6 @@ public struct StrykerReport: Sendable {
         parts.append("""
         <div class="cards">
         \(card(summary.testStrength, "Test strength", "caught \(caught) of the \(reached) mutants the tests reach"))
-        \(card(summary.mutationScore, "Mutation score", "caught \(caught) of all \(total)"))
         </div>
         """)
 
@@ -117,8 +115,9 @@ public struct StrykerReport: Sendable {
             """)
         }
 
-        var meta = ["caught \(caught) · survived \(summary.survived) · no test reaches \(summary.noCoverage)"
+        var meta = ["caught \(caught) · survived \(summary.survived)"
             + (summary.unviable > 0 ? " · did not build \(summary.unviable)" : "")]
+        if let unreached = Report.unreached(summary) { meta.append(unreached) }
         if let run { meta.append(Self.escape(run.line)) }
         if let took = Report.took(summary) { meta.append(took) }
         parts.append(meta.map { "<p class=\"muted\">\($0)</p>" }.joined(separator: "\n"))
@@ -150,13 +149,13 @@ public struct StrykerReport: Sendable {
                 <tr><td>\(Self.escape(area.name))</td>\
                 <td class="num \(Self.grade(area.score))">\(area.score.map { "\(Int($0.rounded()))%" } ?? "—")</td>\
                 <td class="num">\(area.count(.killed) + area.count(.timedOut))</td>\
-                <td class="num">\(area.count(.survived))</td><td class="num">\(area.count(.noCoverage))</td></tr>
+                <td class="num">\(area.count(.survived))</td></tr>
                 """
             }.joined(separator: "\n")
             parts.append(Self.table(
                 title: "By \(summary.areasAreModules ? "module" : "folder")", note: "weakest first",
-                head: [summary.areasAreModules ? "Module" : "Folder", "Score", "Caught", "Survived", "No coverage"],
-                numbers: [1, 2, 3, 4],
+                head: [summary.areasAreModules ? "Module" : "Folder", "Score", "Caught", "Survived"],
+                numbers: [1, 2, 3],
                 rows: rows
             ))
         }
@@ -192,9 +191,6 @@ public struct StrykerReport: Sendable {
                         <td class="muted">\(survivor.gapKind.hint)</td></tr>
                         """)
                     }
-                    if entry.unreached > 0 {
-                        rows.append("<tr class=\"line\"><td colspan=\"4\" class=\"muted\">and \(entry.unreached) more in it no test reaches</td></tr>")
-                    }
                 }
             }
             parts.append(Self.table(
@@ -202,27 +198,6 @@ public struct StrykerReport: Sendable {
                 head: ["Where", "Kind", "Change", "What to add"],
                 widths: [26, 12, 32, 30],
                 rows: rows.joined(separator: "\n")
-            ))
-        }
-
-        if !plan.unreached.isEmpty {
-            let row = { (file: (path: String, count: Int)) in
-                """
-                <tr><td><a href="\(self.link(to: file.path))">\(Self.escape(self.relative(file.path)))</a></td>\
-                <td class="num">\(file.count)</td></tr>
-                """
-            }
-            let shown = plan.unreached.prefix(10).map(row)
-            let rest = plan.unreached.dropFirst(10)
-            let more = rest.isEmpty ? [] : ["""
-                <tr><td colspan="2"><details><summary>\(rest.count) more file(s)</summary>\
-                <table>\(rest.map(row).joined(separator: "\n"))</table></details></td></tr>
-                """]
-            parts.append(Self.table(
-                title: "No test reaches", note: "\(plan.unreachedTotal) mutant(s) in \(plan.unreached.count) file(s)",
-                head: ["File", "Mutants"],
-                numbers: [1],
-                rows: (shown + more).joined(separator: "\n")
             ))
         }
 

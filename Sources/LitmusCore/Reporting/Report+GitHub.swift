@@ -12,12 +12,10 @@ extension Report {
 
         let score = summary.score.map { "\(Int($0.rounded()))%" } ?? "—"
         lines.append("### Litmus score \(score)")
-        var counts = ["caught \(caught)", "survived \(summary.survived)", "no test reaches \(summary.noCoverage)"]
+        var counts = ["caught \(caught)", "survived \(summary.survived)"]
         if summary.unviable > 0 { counts.append("did not build \(summary.unviable)") }
-        if let whole = summary.mutationScore, summary.noCoverage > 0 {
-            counts.insert("mutation score \(Int(whole.rounded()))%", at: 0)
-        }
         lines.append(counts.joined(separator: " · "))
+        if let unreached = Self.unreached(summary) { lines += ["", unreached] }
         if let took = Self.took(summary) { lines += ["", took] }
 
         // Untested functions first: nothing there catches anything.
