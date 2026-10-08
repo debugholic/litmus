@@ -134,7 +134,8 @@ measures the tests against the code they run, not the project.
 
 ### What it mutates, by default
 
-The whole tree, less the mutants its tests could never catch.
+The whole tree, less the mutants its tests could never catch and the code a
+tool wrote.
 
 **What the tests are aimed at.** Each test target names the modules it tests
 — by name, `CheckoutTests` for `Checkout`, and by `@testable
@@ -149,6 +150,14 @@ is what the tests mean.
 will survive whatever the code says, and the only thing running it buys is the
 minute it took. Litmus runs the suite once with coverage on and filters before
 writing, so a skipped mutant costs neither a run nor the file growth.
+
+**What a tool wrote.** Generated code is fixed by running its generator, not by
+a test, so a mutant that survives in it says nothing anyone can act on. A file
+git ignores or marks `linguist-generated` is left out, and so is one whose
+opening comment says a tool wrote it: `Generated using`, `DO NOT EDIT`,
+`@generated`. On one Tuist app that was 36 mutants in its `Derived/` folder,
+11 of them in values Swift computes once, which take a launch each when a
+test reads them.
 
 **What a change touched, with `--since`.** The whole tree is the right scope
 for a nightly job; for a review it is thousands of mutants on code nobody

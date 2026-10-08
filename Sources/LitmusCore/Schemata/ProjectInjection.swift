@@ -16,6 +16,8 @@ public struct ProjectInjection: Sendable {
         public let unchanged: Int
         /// Files left alone because the tests are not aimed at them.
         public let outOfScope: Int
+        /// Files left alone because a tool writes them.
+        public let generated: Int
     }
 
     /// Directories the build makes for itself, and can make again.
@@ -99,8 +101,17 @@ public struct ProjectInjection: Sendable {
         var uncovered = 0
         var unchanged = 0
         var outOfScope = 0
+        var generated = 0
 
         let files = try swiftFiles(in: workingCopy)
+        // Resolved on both sides: /tmp is /private/tmp, and a prefix that
+        // missed would ask git about paths outside the project and hear nothing.
+        let base = workingCopy.resolvingSymlinksInPath().path + "/"
+        let relative = files.map { file in
+            let path = file.resolvingSymlinksInPath().path
+            return path.hasPrefix(base) ? String(path.dropFirst(base.count)) : path
+        }
+        let toolWritten = GeneratedFiles.among(relative, in: project)
         let scope = scope?.rebased(from: project, to: workingCopy)
 
         // Coverage was measured on the original project, so its paths name the
@@ -109,8 +120,13 @@ public struct ProjectInjection: Sendable {
         let coverage = coverage?.rebased(onto: files.map(\.path))
         let changed = changed?.rebased(onto: files.map(\.path), root: workingCopy)
 
-        for file in files {
+        for (file, path) in zip(files, relative) {
             if let include, !file.path.contains(include) { continue }
+
+            if toolWritten.contains(path) {
+                generated += 1
+                continue
+            }
 
             if let scope, !scope.contains(file.path) {
                 outOfScope += 1
@@ -152,7 +168,8 @@ public struct ProjectInjection: Sendable {
             untouched: untouched,
             uncovered: uncovered,
             unchanged: unchanged,
-            outOfScope: outOfScope
+            outOfScope: outOfScope,
+            generated: generated
         )
     }
 

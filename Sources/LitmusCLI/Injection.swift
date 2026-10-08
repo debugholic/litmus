@@ -165,6 +165,7 @@ struct Injection {
     static func scopeLine(_ result: ProjectInjection.Result) -> String {
         var dropped: [String] = []
         if result.outOfScope > 0 { dropped.append("\(result.outOfScope) file(s) the tests do not aim at") }
+        if result.generated > 0 { dropped.append("\(result.generated) generated file(s)") }
         if result.unchanged > 0 { dropped.append("\(result.unchanged) outside the change") }
         if result.uncovered > 0 { dropped.append("\(result.uncovered) unreachable") }
 
