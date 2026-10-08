@@ -18,6 +18,18 @@ final class SiteCollector: SyntaxVisitor {
         super.init(viewMode: .sourceAccurate)
     }
 
+    // MARK: - conditional compilation
+
+    /// A `#if` condition is the compiler's, and takes no call: `os(iOS) ||
+    /// os(tvOS)` with a switch in it did not build. The code a clause keeps
+    /// runs like any other, so it is walked and the condition is not.
+    override func visit(_ node: IfConfigClauseSyntax) -> SyntaxVisitorContinueKind {
+        if let elements = node.elements {
+            walk(elements)
+        }
+        return .skipChildren
+    }
+
     // MARK: - token swaps
 
     override func visit(_ node: BinaryOperatorExprSyntax) -> SyntaxVisitorContinueKind {
@@ -378,15 +390,14 @@ private extension BooleanLiteralExprSyntax {
     /// A literal that is a value at run time, rather than something the
     /// compiler reads.
     ///
-    /// `#if true`, an attribute's argument and an enum's raw value have to
-    /// stay literals. A default argument can be read from a public function's
-    /// signature, where a file's private switch is out of reach. A pattern is
-    /// matched rather than evaluated.
+    /// An attribute's argument and an enum's raw value have to stay
+    /// literals; a `#if` condition is never walked. A default argument can be
+    /// read from a public function's signature, where a file's private switch
+    /// is out of reach. A pattern is matched rather than evaluated.
     var isRuntimeValue: Bool {
         var current = parent
         while let node = current {
-            if node.is(IfConfigClauseSyntax.self)
-                || node.is(AttributeSyntax.self)
+            if node.is(AttributeSyntax.self)
                 || node.is(EnumCaseElementSyntax.self)
                 || node.is(FunctionParameterSyntax.self)
                 || node.is(EnumCaseParameterSyntax.self)
