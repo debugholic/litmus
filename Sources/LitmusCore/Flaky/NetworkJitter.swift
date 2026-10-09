@@ -233,7 +233,7 @@ public enum NetworkJitter {
 
         for case let url as URL in walker {
             if [".build", "build", "DerivedData", "Pods", "Carthage", "checkouts"].contains(url.lastPathComponent) {
-                walker.skipDescendants()
+                walker.skipDescendants(of: url)
                 continue
             }
             guard url.pathExtension == "swift", let source = try? String(contentsOf: url, encoding: .utf8) else { continue }

@@ -184,6 +184,28 @@ struct ProjectInjectionTests {
         #expect(source.read("Tuist/.build/checkouts/Other/B.swift") == Self.mutable)
     }
 
+    /// A local package inside an app keeps its own `.build`, and the copy links
+    /// it. The walk skipped that link with `skipDescendants()`, which on a link
+    /// holds over to the next directory: everything in `Core`, read right after
+    /// `.build`, went unmutated without a word.
+    @Test("mutates the directories read after a linked dependency store")
+    func walksPastLinkedStores() throws {
+        let source = try Sandbox([
+            "Modules/.build/debug/Stale.swift": Self.mutable,
+            "Modules/Core/A.swift": Self.mutable,
+            "Modules/Data/B.swift": Self.mutable,
+            "Modules/Domain/C.swift": Self.mutable,
+            "Modules/Feature/D.swift": Self.mutable,
+        ])
+        let destination = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("litmus-copy-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: destination) }
+
+        let result = try ProjectInjection()(project: source.root, workingCopy: destination)
+
+        #expect(Set(result.mutants.map(\.fileName)) == ["A.swift", "B.swift", "C.swift", "D.swift"])
+    }
+
     /// SwiftPM builds into the package's own `.build`. Linking that one would
     /// build mutants into the user's, so it is left for the copy to remake.
     @Test("leaves a package's own build directory out")

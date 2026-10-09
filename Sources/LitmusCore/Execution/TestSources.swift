@@ -41,7 +41,7 @@ public enum TestSources {
         for case let url as URL in walker {
             let name = url.lastPathComponent
             if skipped.contains(name) || name.hasSuffix(".noindex") {
-                walker.skipDescendants()
+                walker.skipDescendants(of: url)
                 continue
             }
             guard url.pathExtension == "swift" else { continue }
