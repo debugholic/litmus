@@ -99,7 +99,7 @@ public enum FlakyDriver {
             var listing = __CommandLineArguments_v0()
             listing.listTests = true
             listing.eventStreamOutputPath = stream
-            #if compiler(>=6.2)
+            #if compiler(>=6.3)
             listing.eventStreamSchemaVersion = "0"
             #else
             listing.eventStreamVersion = 0
@@ -152,7 +152,7 @@ public enum FlakyDriver {
                 arguments.quiet = true
                 arguments.filter = filter
                 arguments.eventStreamOutputPath = stream
-                #if compiler(>=6.2)
+                #if compiler(>=6.3)
                 arguments.eventStreamSchemaVersion = "0"
                 #else
                 arguments.eventStreamVersion = 0
