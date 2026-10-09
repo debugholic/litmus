@@ -51,7 +51,7 @@ public struct FlakyRisk {
 
         for case let url as URL in walker {
             if ["build", "DerivedData", "Pods", "Carthage"].contains(url.lastPathComponent) {
-                walker.skipDescendants()
+                walker.skipDescendants(of: url)
                 continue
             }
             guard url.pathExtension == "swift", let source = try? String(contentsOf: url, encoding: .utf8) else { continue }

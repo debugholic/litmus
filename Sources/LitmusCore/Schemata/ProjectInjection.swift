@@ -228,7 +228,7 @@ public struct ProjectInjection: Sendable {
 
         for case let url as URL in walker {
             if Self.notMutated.contains(url.lastPathComponent) {
-                walker.skipDescendants()
+                walker.skipDescendants(of: url)
                 continue
             }
 
