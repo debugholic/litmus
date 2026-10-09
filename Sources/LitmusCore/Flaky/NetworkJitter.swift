@@ -62,15 +62,19 @@ public enum NetworkJitter {
     /// After the answer, not before the request: a late answer is what the
     /// code has to cope with. In the caller's isolation, so a call on the
     /// main actor stays there.
+    ///
+    /// The call is an argument, made where it was, not a closure the helper
+    /// calls: a closure's error widens to `any Error`, and a call that threw
+    /// `NetworkError` inside a `do throws(NetworkError)` no longer compiled.
+    /// Arguments are evaluated in order, so the server is noted before the
+    /// call goes out, as before, and still when it fails.
     static let helper = """
     private func \(helperName)<T>(
         _ upTo: UInt64,
-        _ via: Any?,
+        _ noted: Void,
         isolation: isolated (any Actor)? = #isolation,
-        _ body: () async throws -> sending T
-    ) async rethrows -> sending T {
-        __litmus_note_server(via)
-        let value = try await body()
+        _ value: sending T
+    ) async -> sending T {
         if upTo > 0 {
             try? await Task.sleep(nanoseconds: UInt64.random(in: 0...upTo) * 1_000_000)
         }
@@ -280,13 +284,9 @@ public enum NetworkJitter {
             let inner = node.expression
             guard let call = NetworkJitter.networkCall(heading: inner) else { return .visitChildren }
 
-            // The `try` stays outside, on the helper, which rethrows. The
-            // call in the closure needs one of its own. In the parentheses,
-            // not trailing: in a `guard` or `if` condition a trailing closure
-            // reads as the statement's body.
-            let original = text(node)
-            let body = inner.is(TryExprSyntax.self) ? original : "try " + original
-            replace(node, with: "await \(helperName)(\(upTo), \(via(call)), { \(body) })", .awaited)
+            // The call goes in as the last argument, `try` and all staying
+            // where they were, so it throws what it threw.
+            replace(node, with: "await \(helperName)(\(upTo), __litmus_note_server(\(via(call))), \(text(node)))", .awaited)
             // A call inside its arguments would be inside the closure
             // already, and an edit inside an edit.
             return .skipChildren
@@ -300,7 +300,7 @@ public enum NetworkJitter {
                       !value.is(AwaitExprSyntax.self), !value.is(TryExprSyntax.self),
                       let call = NetworkJitter.networkCall(heading: value)
                 else { continue }
-                replace(value, with: "\(helperName)(\(upTo), \(via(call)), { try await \(text(value)) })", .awaited)
+                replace(value, with: "\(helperName)(\(upTo), __litmus_note_server(\(via(call))), try await \(text(value)))", .awaited)
             }
             return .visitChildren
         }
