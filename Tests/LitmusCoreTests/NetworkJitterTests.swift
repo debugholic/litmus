@@ -17,7 +17,7 @@ struct NetworkJitterTests {
         let (rewritten, calls) = NetworkJitter.apply(to: source, upTo: 300)
 
         #expect(calls == 1)
-        #expect(rewritten.contains("try await __litmus_jitter(300, session, { try await session.data(for: request) })"))
+        #expect(rewritten.contains("try await __litmus_jitter(300, __litmus_note_server(session), await session.data(for: request))"))
         #expect(rewritten.components(separatedBy: "private func __litmus_jitter").count == 2)
     }
 
@@ -53,12 +53,12 @@ struct NetworkJitterTests {
         let (rewritten, calls) = NetworkJitter.apply(to: source, upTo: 0)
 
         #expect(calls == 3)
-        #expect(rewritten.contains("__litmus_jitter(0, URLSession.shared, {"))
-        #expect(rewritten.contains("__litmus_jitter(0, self.client.session, {"))
-        #expect(rewritten.contains("__litmus_jitter(0, nil, { try await makeSession().data(for: r) })"))
+        #expect(rewritten.contains("__litmus_jitter(0, __litmus_note_server(URLSession.shared), "))
+        #expect(rewritten.contains("__litmus_jitter(0, __litmus_note_server(self.client.session), "))
+        #expect(rewritten.contains("__litmus_jitter(0, __litmus_note_server(nil), await makeSession().data(for: r))"))
     }
 
-    /// What follows the call goes in the closure with it, so it still applies.
+    /// What follows the call goes in the argument with it, so it still applies.
     @Test("holds back a call followed by a tuple element, an unwrap or a member")
     func wrapsWhatFollows() {
         let source = """
@@ -71,8 +71,8 @@ struct NetworkJitterTests {
         let (rewritten, calls) = NetworkJitter.apply(to: source, upTo: 0)
 
         #expect(calls == 2)
-        #expect(rewritten.contains("try? await __litmus_jitter(0, s, { try await s.data(from: u).0 })"))
-        #expect(rewritten.contains("try! await __litmus_jitter(0, s, { try await s.data(from: u).0.count })"))
+        #expect(rewritten.contains("try? await __litmus_jitter(0, __litmus_note_server(s), await s.data(from: u).0)"))
+        #expect(rewritten.contains("try! await __litmus_jitter(0, __litmus_note_server(s), await s.data(from: u).0.count)"))
     }
 
     @Test("holds back the value of an async let")
@@ -88,7 +88,7 @@ struct NetworkJitterTests {
         let (rewritten, calls) = NetworkJitter.apply(to: source, upTo: 200)
 
         #expect(calls == 1)
-        #expect(rewritten.contains("async let first = __litmus_jitter(200, s, { try await s.data(from: u) })"))
+        #expect(rewritten.contains("async let first = __litmus_jitter(200, __litmus_note_server(s), try await s.data(from: u))"))
         #expect(rewritten.contains("async let other = compute()"))
     }
 
@@ -141,6 +141,36 @@ struct NetworkJitterTests {
 
         #expect(calls == 0)
         #expect(rewritten == source)
+    }
+
+    /// A call that throws one error type keeps it: wrapped in a closure, its
+    /// error widened to `any Error`, and a `do throws(LoadError)` around it
+    /// stopped compiling.
+    @Test("keeps the error type of a call that throws one")
+    func keepsTypedThrows() throws {
+        let source = """
+        import Foundation
+
+        enum LoadError: Error { case failed }
+
+        protocol Client: Sendable {
+            func data(for request: URLRequest) async throws(LoadError) -> Data
+        }
+
+        func load(_ client: any Client, _ request: URLRequest) async throws(LoadError) -> Data {
+            let data: Data
+            do throws(LoadError) {
+                data = try await client.data(for: request)
+            } catch {
+                throw error
+            }
+            return data
+        }
+        """
+
+        let (rewritten, calls) = NetworkJitter.apply(to: source, upTo: 300)
+        #expect(calls == 1)
+        try expectTypeChecks(rewritten)
     }
 
     /// The point of `#isolation`: a call on the main actor has to stay
@@ -200,13 +230,17 @@ struct NetworkJitterTests {
 
         let (rewritten, calls) = NetworkJitter.apply(to: source, upTo: 300)
         #expect(calls == 8)
+        try expectTypeChecks(rewritten)
+    }
 
+    /// Type-checks `source` as one file in Swift 6.
+    private func expectTypeChecks(_ source: String) throws {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("litmus-jitter-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let file = directory.appendingPathComponent("Feed.swift")
-        try rewritten.write(to: file, atomically: true, encoding: .utf8)
+        let file = directory.appendingPathComponent("Source.swift")
+        try source.write(to: file, atomically: true, encoding: .utf8)
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
